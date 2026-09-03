@@ -1,0 +1,16 @@
+app:
+  name: AIOnSite
+  environment: development
+
+logging:
+  level: INFO
+
+agent:
+  default_agent: inspection_agent
+  max_iterations: 10
+
+verification:
+  enabled: false
+
+audit:
+  enabled: false
