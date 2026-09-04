@@ -58,3 +58,29 @@ async def test_tool_validates_arguments():
     result = await DeviationTool().run(actual="not-a-number", limit=1)
     assert result.ok is False
     assert "invalid arguments" in result.error
+
+
+async def test_tool_missing_required_field_is_a_validation_error_with_schema():
+    result = await DeviationTool().run(actual=120)  # missing 'limit'
+    assert result.ok is False
+    assert result.error_kind == "validation"
+    assert result.expected_schema is not None
+    assert set(result.expected_schema["required"]) == {"actual", "limit"}
+
+
+async def test_tool_wrong_field_names_is_a_validation_error():
+    """Reproduces the reported failure: the model guessed field names that
+    don't match the tool's real schema (e.g. 'observed_pressure'/'approved_limit'
+    instead of 'actual'/'limit')."""
+    result = await DeviationTool().run(observed_pressure=120, approved_limit=100)
+    assert result.ok is False
+    assert result.error_kind == "validation"
+    assert "actual" in result.expected_schema["required"]
+    assert "limit" in result.expected_schema["required"]
+
+
+async def test_tool_execution_failure_has_execution_error_kind():
+    result = await CalculatorTool().run(expression="1/0")
+    assert result.ok is False
+    assert result.error_kind == "execution"
+    assert result.expected_schema is None

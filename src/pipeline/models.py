@@ -11,7 +11,7 @@ from __future__ import annotations
 import enum
 import time
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -49,6 +49,37 @@ class ExecutionStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
+class Criticality(str, enum.Enum):
+    """How much a node's (and its tools') failure should matter.
+
+    ``OPTIONAL``  -- failure degrades the node but never blocks the task.
+    ``REQUIRED``  -- unresolved failure fails the node and blocks dependents
+                     (the default: most steps in a plan matter).
+    ``CRITICAL``  -- unresolved failure blocks the node and is surfaced as a
+                     structural block on the whole task, not just a normal
+                     node failure.
+    """
+
+    OPTIONAL = "optional"
+    REQUIRED = "required"
+    CRITICAL = "critical"
+
+
+class NodeOutcome(str, enum.Enum):
+    """Whether a node achieved its objective -- distinct from :class:`NodeStatus`.
+
+    A node can reach ``NodeStatus.COMPLETED`` (the coroutine returned without
+    raising) while its outcome is ``DEGRADED`` (an optional tool failed) --
+    these two axes are tracked separately on purpose so "the code ran" is
+    never silently reported as "the objective was met".
+    """
+
+    SATISFIED = "satisfied"
+    DEGRADED = "degraded"
+    BLOCKED = "blocked"
+    FAILED = "failed"
+
+
 class RetryPolicy(BaseModel):
     max_retries: int = Field(default=1, ge=0, le=10)
     backoff_seconds: float = Field(default=0.5, ge=0)
@@ -64,6 +95,17 @@ class ToolResult(BaseModel):
     input: dict[str, Any] = Field(default_factory=dict)
     output: Any = None
     error: str | None = None
+    # ``error_kind`` distinguishes *why* a call failed so callers can decide
+    # whether it is repairable: "validation" (bad arguments -- feed the
+    # schema back to the model and retry) vs "execution" (the tool itself
+    # raised) vs "not_found" (unknown tool name). ``None`` on success.
+    error_kind: Literal["validation", "execution", "not_found"] | None = None
+    # Populated only on a validation failure: the tool's JSON schema, so a
+    # repair prompt can tell the model exactly what shape is expected.
+    expected_schema: dict[str, Any] | None = None
+    # Set once this call's output has been recorded as first-class Evidence
+    # (see ``src/state/evidence.py``) -- links the call back to that record.
+    evidence_id: str | None = None
     duration_ms: float | None = None
     started_at: float = Field(default_factory=time.time)
 
@@ -103,8 +145,13 @@ class PipelineNode(BaseModel):
     require_local: bool = False
     retry_policy: RetryPolicy = Field(default_factory=RetryPolicy)
     timeout_seconds: float | None = None
+    # How much this node's (and, by default, its tools') failure matters.
+    # See :class:`Criticality`. Defaults to REQUIRED: most plan steps exist
+    # because they matter, so silence-by-default would hide real gaps.
+    criticality: Criticality = Criticality.REQUIRED
     # runtime fields ------------------------------------------------------
     status: NodeStatus = NodeStatus.PENDING
+    outcome: NodeOutcome | None = None
     attempts: int = 0
     started_at: float | None = None
     finished_at: float | None = None
@@ -173,6 +220,8 @@ class Pipeline(BaseModel):
                     "provider": n.provider,
                     "model": n.model,
                     "status": n.status.value,
+                    "criticality": n.criticality.value,
+                    "outcome": n.outcome.value if n.outcome else None,
                     "attempts": n.attempts,
                     "duration_ms": n.duration_ms,
                     "error": n.error,

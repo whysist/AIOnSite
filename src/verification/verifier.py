@@ -17,11 +17,17 @@ callers enforce ``max_retries`` / ``max_replans``.
 from __future__ import annotations
 
 import json
+import re
 
 from ..core.exceptions import VerificationError
 from ..core.logging import get_logger
 from ..llm.base import BaseLLM
+from ..pipeline.models import ToolResult
+from ..pipeline.requirements import TaskRequirement
+from ..state.evidence import Evidence
 from .schemas import (
+    MissingEvidence,
+    MissingRequirement,
     Recommendation,
     Severity,
     VerificationIssue,
@@ -57,8 +63,15 @@ class ResultVerifier:
         require_evidence: bool = False,
         require_json: bool = False,
         structured: dict | None = None,
+        requirements: list[TaskRequirement] | None = None,
+        evidence: list[Evidence] | None = None,
+        tool_failures: list[ToolResult] | None = None,
+        node_outcomes: dict[str, str] | None = None,
     ) -> VerificationResult:
         issues: list[VerificationIssue] = []
+        missing_requirements: list[MissingRequirement] = []
+        missing_evidence: list[MissingEvidence] = []
+        requirement_statuses: dict[str, str] = {}
         text = (result or "").strip()
 
         if not text and not structured:
@@ -99,7 +112,14 @@ class ResultVerifier:
                             severity=Severity.MAJOR,
                         )
                     )
-        if require_evidence and not _looks_evidenced(text):
+        evidence = evidence or []
+        requirements = requirements or []
+        tool_failures = tool_failures or []
+
+        if require_evidence and not evidence and not _looks_evidenced(text):
+            missing_evidence.append(
+                MissingEvidence(description="no retrieved evidence was attached to this execution")
+            )
             issues.append(
                 VerificationIssue(
                     code="missing_evidence",
@@ -108,7 +128,59 @@ class ResultVerifier:
                 )
             )
 
+        if tool_failures:
+            failed_names = sorted({tr.tool for tr in tool_failures})
+            issues.append(
+                VerificationIssue(
+                    code="unresolved_tool_failure",
+                    message=(
+                        f"{len(failed_names)} tool(s) failed and were not recovered by "
+                        "repair: " + ", ".join(failed_names)
+                    ),
+                    severity=Severity.CRITICAL,
+                )
+            )
+
+        # Completeness: every *required* TaskRequirement must be traceable
+        # either to a plan step that actually completed successfully, or
+        # (for requirements with no single producing step) to a mention in
+        # the final text. This is what stops "the DAG finished" from being
+        # reported as "the task was done" -- see TaskStatus in
+        # ``src/pipeline/task_status.py`` for how this feeds the final gate.
+        for req in requirements:
+            outcome = (node_outcomes or {}).get(req.source_step_id or "")
+            if outcome == "satisfied":
+                status = "satisfied"
+            elif outcome in ("blocked", "failed"):
+                status = "blocked"
+            elif outcome == "degraded":
+                status = "unsatisfied"
+            elif _requirement_mentioned(req.description, text):
+                status = "satisfied"
+            else:
+                status = "unsatisfied"
+            requirement_statuses[req.id] = status
+            if req.required and status != "satisfied":
+                reason = (
+                    f"the step meant to satisfy this did not complete successfully "
+                    f"(outcome={outcome!r})" if outcome
+                    else "no supporting evidence or completed step found"
+                )
+                missing_requirements.append(
+                    MissingRequirement(
+                        requirement_id=req.id, description=req.description, reason=reason,
+                    )
+                )
+
         rule_result = _score_from_issues(issues)
+        if missing_requirements or missing_evidence:
+            rule_result.passed = False
+            rule_result.score = min(rule_result.score, 0.4)
+            if rule_result.recommendation is Recommendation.ACCEPT:
+                rule_result.recommendation = Recommendation.REPLAN
+        rule_result.missing_requirements = missing_requirements
+        rule_result.missing_evidence = missing_evidence
+        rule_result.requirement_statuses = requirement_statuses
 
         llm = self._llm
         if llm is None:
@@ -120,7 +192,16 @@ class ResultVerifier:
             _log.warning("llm_critique_failed", error=str(exc))
             return rule_result
 
-        return _merge(rule_result, critique, self._min_score)
+        merged = _merge(rule_result, critique, self._min_score)
+        merged.missing_requirements = missing_requirements
+        merged.missing_evidence = missing_evidence
+        merged.requirement_statuses = requirement_statuses
+        if missing_requirements or missing_evidence:
+            # A completeness gap is a fact about execution, not a matter of
+            # LLM-critique opinion -- the critique can only ever agree that
+            # this blocks passing, never override it back to a pass.
+            merged.passed = False
+        return merged
 
     # ------------------------------------------------------------------
     async def _llm_critique(
@@ -158,6 +239,23 @@ class ResultVerifier:
 def _looks_evidenced(text: str) -> bool:
     markers = ("source:", "page", "[", "http://", "https://", "citation", "evidence")
     return any(m in text.lower() for m in markers)
+
+
+def _requirement_mentioned(description: str, text: str) -> bool:
+    """Weak fallback check: does the final text plausibly address *description*?
+
+    Only used when there is no ``node_outcomes`` signal for the requirement's
+    producing step (e.g. a plan-level requirement with no single source
+    step). This is intentionally a coarse keyword-overlap heuristic, not a
+    semantic check -- it exists to avoid false negatives for requirements
+    that have no step to point at, not to replace the step-outcome check.
+    """
+    words = re.findall(r"[a-zA-Z]{4,}", description.lower())[:8]
+    if not words:
+        return True
+    lowered = text.lower()
+    hits = sum(1 for w in words if w in lowered)
+    return hits >= max(1, len(words) // 2)
 
 
 def _score_from_issues(issues: list[VerificationIssue]) -> VerificationResult:

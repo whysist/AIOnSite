@@ -78,7 +78,8 @@ def create_llm(
         return OllamaProvider(
             base_url=settings.ollama_base_url,
             model=model,
-            timeout=settings.request_timeout_seconds,
+            timeout=settings.llm_read_timeout_seconds or settings.request_timeout_seconds,
+            connect_timeout=settings.llm_connect_timeout_seconds,
         )
 
     if name == "vllm":

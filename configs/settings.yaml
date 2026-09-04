@@ -16,7 +16,13 @@ pipeline:
   add_terminal_verifier: true
   max_retries: 2
   max_replans: 1
-  node_timeout_seconds: 120
+  node_timeout_seconds: 300         # keep >= llm.read_timeout_seconds -- wraps the whole node, including the LLM call
+  plan_retry_backoff_seconds: 0.5   # backoff between planner retries after a provider connection/timeout error
+  tool_max_repair_attempts: 2       # bounded argument-repair retries per tool call before it counts as unresolved
+
+llm:
+  connect_timeout_seconds: 10       # fails fast if the provider (e.g. Ollama) isn't reachable at all
+  read_timeout_seconds: 300         # raise further for slower CPU-only local model loads
 
 verification:
   enabled: true

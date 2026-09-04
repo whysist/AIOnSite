@@ -90,11 +90,26 @@ class Settings(BaseSettings):
     llm_temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     llm_max_tokens: int = Field(default=2000, gt=0, le=200_000)
     request_timeout_seconds: float = Field(default=60.0, gt=0)
+    # Separate connect vs read timeout so a slow local model (long read) is
+    # not confused with a server that refuses connections (fast connect
+    # failure). Read defaults to request_timeout_seconds when unset.
+    llm_connect_timeout_seconds: float = Field(default=10.0, gt=0)
+    # Default raised from the old blanket 60s: a CPU-only load of a 7B model
+    # (no GPU/VRAM) can take several minutes on its first request, and that
+    # must not be mistaken for the server being down (see ProviderTimeoutError
+    # vs ProviderConnectionError in src/llm/ollama_provider.py).
+    llm_read_timeout_seconds: float | None = Field(default=300.0, gt=0)
 
     # --- Orchestration limits ------------------------------------------
     max_retries: int = Field(default=2, ge=0, le=10)
     max_replans: int = Field(default=1, ge=0, le=5)
-    node_timeout_seconds: float = Field(default=120.0, gt=0)
+    # Must stay >= llm_read_timeout_seconds: this wraps the whole node
+    # (including the LLM call) in asyncio.wait_for, so a shorter value here
+    # would cancel a slow-loading model before the provider's own read
+    # timeout ever gets a chance to matter.
+    node_timeout_seconds: float = Field(default=300.0, gt=0)
+    plan_retry_backoff_seconds: float = Field(default=0.5, ge=0)
+    tool_max_repair_attempts: int = Field(default=2, ge=0, le=10)
 
     # --- Sovereignty ---------------------------------------------------
     sovereign_mode: bool = False

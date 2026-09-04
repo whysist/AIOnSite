@@ -66,7 +66,12 @@ class BaseTool(ABC, Generic[TInput]):
             args = self.InputModel(**kwargs)
         except ValidationError as exc:
             call.ok = False
-            call.error = f"invalid arguments: {exc}"
+            call.error_kind = "validation"
+            call.expected_schema = self.InputModel.model_json_schema()
+            call.error = "invalid arguments: " + "; ".join(
+                f"{'.'.join(str(p) for p in e['loc']) or '(value)'}: {e['msg']}"
+                for e in exc.errors()
+            )
             call.duration_ms = (time.perf_counter() - started) * 1000
             _log.warning("tool_bad_args", tool=self.name, error=call.error)
             return call
@@ -84,9 +89,11 @@ class BaseTool(ABC, Generic[TInput]):
             call.ok = True
         except ToolExecutionError as exc:
             call.ok = False
+            call.error_kind = "execution"
             call.error = exc.message
         except Exception as exc:  # noqa: BLE001
             call.ok = False
+            call.error_kind = "execution"
             call.error = f"{type(exc).__name__}: {exc}"
         finally:
             call.duration_ms = (time.perf_counter() - started) * 1000

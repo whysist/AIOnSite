@@ -21,11 +21,21 @@ from ..audit.trail import AuditTrail
 from ..core.config import Settings, get_settings
 from ..core.exceptions import PipelineExecutionError
 from ..core.logging import bind_execution, get_logger
+from ..state.evidence import Evidence
 from ..tools.registry import ToolRegistry
 from ..verification.schemas import Recommendation, VerificationResult
 from ..verification.verifier import ResultVerifier
 from .graph import PipelineGraph
-from .models import AgentResult, NodeStatus, NodeType, Pipeline, PipelineNode
+from .models import (
+    AgentResult,
+    Criticality,
+    NodeOutcome,
+    NodeStatus,
+    NodeType,
+    Pipeline,
+    PipelineNode,
+)
+from .requirements import RequirementStatus
 from .state import ExecutionContext
 
 _log = get_logger("pipeline.executor")
@@ -99,7 +109,7 @@ class PipelineExecutor:
         context = ctx.state.outputs_for(node.depends_on)
 
         if node.type is NodeType.VERIFIER:
-            await self._run_verifier_node(ctx, node, context)
+            await self._run_verifier_node(ctx, pipeline, node, context)
             return
 
         agent = self._library.get(node.agent) or self._library.get("custom")
@@ -131,9 +141,9 @@ class PipelineExecutor:
                 )
                 result.node_id = node.id
                 node.result = result
-                node.status = NodeStatus.COMPLETED
                 node.finished_at = time.time()
                 ctx.state.record(node.id, result)
+
                 for tr in result.tool_results:
                     self._audit.record(
                         ctx.execution_id,
@@ -142,12 +152,72 @@ class PipelineExecutor:
                         message=tr.tool,
                         metadata={"node": node.id, "input": tr.input, "error": tr.error},
                     )
+                    # Any successful tool call becomes first-class Evidence,
+                    # generically (not tied to a specific tool implementation)
+                    # so downstream nodes and the verifier can see *what was
+                    # actually retrieved* instead of only free text.
+                    if tr.ok:
+                        ev = Evidence(
+                            source=tr.tool, content=tr.output, reference=tr.call_id,
+                            producer_tool=tr.tool, producer_node=node.id,
+                        )
+                        tr.evidence_id = ev.id
+                        ctx.state.record_evidence(ev)
+                for entry in result.metadata.get("repair_log") or []:
+                    event = (
+                        AuditEventType.TOOL_REPAIR_EXHAUSTED if entry.get("exhausted")
+                        else AuditEventType.TOOL_REPAIR_ATTEMPTED
+                    )
+                    self._audit.record(
+                        ctx.execution_id, event, component="tool",
+                        status="failed" if entry.get("exhausted") else "retrying",
+                        message=entry["tool"],
+                        metadata={
+                            "node": node.id, "attempt": entry["attempt"],
+                            "error": entry.get("error"),
+                        },
+                    )
+
+                unresolved_tools: set[str] = set(result.metadata.get("unresolved_tools") or [])
+                if unresolved_tools and node.criticality in (Criticality.REQUIRED, Criticality.CRITICAL):
+                    node.status = NodeStatus.FAILED
+                    node.outcome = (
+                        NodeOutcome.BLOCKED if node.criticality is Criticality.CRITICAL
+                        else NodeOutcome.FAILED
+                    )
+                    node.error = (
+                        f"{node.criticality.value} tool(s) failed after repair: "
+                        + ", ".join(sorted(unresolved_tools))
+                    )
+                    ctx.state.errors.append({"node": node.id, "error": node.error})
+                    self._audit.record(
+                        ctx.execution_id,
+                        AuditEventType.NODE_BLOCKED if node.outcome is NodeOutcome.BLOCKED
+                        else AuditEventType.NODE_FAILED,
+                        component="executor", status="failed", message=node.error,
+                        metadata={"node": node.id, "unresolved_tools": sorted(unresolved_tools)},
+                    )
+                    return
+
+                node.status = NodeStatus.COMPLETED
+                if unresolved_tools:
+                    node.outcome = NodeOutcome.DEGRADED
+                    self._audit.record(
+                        ctx.execution_id, AuditEventType.NODE_DEGRADED, component="executor",
+                        status="degraded",
+                        message=f"optional tool(s) failed: {', '.join(sorted(unresolved_tools))}",
+                        metadata={"node": node.id, "unresolved_tools": sorted(unresolved_tools)},
+                    )
+                else:
+                    node.outcome = NodeOutcome.SATISFIED
+
                 self._audit.record(
                     ctx.execution_id, AuditEventType.NODE_COMPLETED, component="executor",
                     message=f"attempt {attempt}",
                     metadata={
                         "node": node.id, "provider": node.provider, "model": node.model,
                         "duration_ms": node.duration_ms, "tool_calls": len(result.tool_results),
+                        "outcome": node.outcome.value,
                     },
                 )
                 return
@@ -180,12 +250,26 @@ class PipelineExecutor:
 
     # ------------------------------------------------------------------
     async def _run_verifier_node(
-        self, ctx: ExecutionContext, node: PipelineNode, context: dict[str, Any]
+        self,
+        ctx: ExecutionContext,
+        pipeline: Pipeline,
+        node: PipelineNode,
+        context: dict[str, Any],
     ) -> None:
         combined = "\n\n".join(f"[{k}]\n{v}" for k, v in context.items()) or ""
+        node_outcomes = {
+            n.id: (n.outcome.value if n.outcome else n.status.value) for n in pipeline.nodes
+        }
         try:
             verdict = await asyncio.wait_for(
-                self._verifier.verify(ctx.task, combined, require_evidence=False),
+                self._verifier.verify(
+                    ctx.task, combined,
+                    require_evidence=bool(ctx.requirements),
+                    requirements=ctx.requirements,
+                    evidence=list(ctx.state.evidence.values()),
+                    tool_failures=ctx.state.unresolved_tool_failures,
+                    node_outcomes=node_outcomes,
+                ),
                 timeout=node.timeout_seconds or self._settings.node_timeout_seconds,
             )
         except Exception as exc:  # noqa: BLE001
@@ -195,6 +279,22 @@ class PipelineExecutor:
             )
 
         ctx.state.verifications[node.id] = verdict
+        if verdict.requirement_statuses:
+            by_id = {r.id: r for r in ctx.requirements}
+            for rid, status_value in verdict.requirement_statuses.items():
+                req = by_id.get(rid)
+                if req is None:
+                    continue
+                try:
+                    req.status = RequirementStatus(status_value)
+                except ValueError:
+                    continue
+                if req.status is not RequirementStatus.SATISFIED:
+                    missing = next(
+                        (m for m in verdict.missing_requirements if m.requirement_id == rid),
+                        None,
+                    )
+                    req.failure_reason = missing.reason if missing else req.failure_reason
         result = AgentResult(
             agent="verifier", node_id=node.id, ok=verdict.passed,
             output=("verification passed" if verdict.passed else "verification failed"),
