@@ -14,6 +14,10 @@ from .base_agent import LLMAgent
 _RESEARCHER = (
     "You are a research agent in a local, sovereign inspection workbench. "
     "Given a task and any context, extract and organise the relevant facts. "
+    "Prefer real, retrieved evidence over guessing: use equipment_lookup for "
+    "structured equipment/maintenance/inspection records, search_knowledge_base "
+    "or extract_structured_evidence for facts from ingested documents, and "
+    "process_document if you need to read a specific document file directly. "
     "Be concrete. If information is missing, say so explicitly -- never invent "
     "evidence, numbers, or citations."
 )
@@ -22,7 +26,9 @@ _ANALYST = (
     "You are an analysis agent. Work only from the provided context and facts. "
     "Perform comparisons and reasoning step by step. If a numeric calculation "
     "is needed and a tool is available, call the tool rather than doing mental "
-    "arithmetic. State assumptions explicitly."
+    "arithmetic. If a specific fact (e.g. an operating limit) is missing from "
+    "context, look it up with equipment_lookup or extract_structured_evidence "
+    "rather than assuming a value. State assumptions explicitly."
 )
 
 _EXECUTOR = (
@@ -50,9 +56,19 @@ _PROMPTS: dict[str, str] = {
 }
 
 _DEFAULT_TOOLS: dict[str, list[str]] = {
-    "analyst": ["calculator", "calculate_deviation", "json_parse"],
-    "executor": ["calculator", "calculate_deviation", "json_parse", "read_file", "text_stats"],
-    "researcher": ["read_file", "text_stats", "json_parse"],
+    "analyst": [
+        "calculator", "calculate_deviation", "json_parse",
+        "equipment_lookup", "extract_structured_evidence",
+    ],
+    "executor": [
+        "calculator", "calculate_deviation", "json_parse", "read_file", "text_stats",
+        "equipment_lookup", "process_document", "search_knowledge_base",
+    ],
+    "researcher": [
+        "read_file", "text_stats", "json_parse",
+        "equipment_lookup", "process_document",
+        "search_knowledge_base", "extract_structured_evidence",
+    ],
 }
 
 

@@ -28,9 +28,36 @@ ruff>=0.6.0
 mypy>=1.11.0
 
 # ---------------------------------------------------------------------------
-# Optional (not imported by this backend; needed by the RAG / OCR / vision
-# workstreams -- install as required):
-#   openai>=1.40.0            # only if you prefer the vendor SDK over httpx
+# Document intelligence / retrieval (src/vision, src/retrieval).
+# Everything in this project degrades gracefully without these -- a missing
+# library produces a logged warning and a fallback result (empty PDF text,
+# hash-based embeddings, a pickle-backed vector store), it never crashes.
+# Install what you need for real (non-degraded) results:
+# ---------------------------------------------------------------------------
+
+# Native-text PDF parsing (equipment datasheets, SOPs, operating limits, ...).
+# Required for src/vision/document_processor.py to read any PDF at all.
+PyMuPDF>=1.24.0
+
+# Real local vector search (src/retrieval/vector_store.py). Falls back to a
+# pickle-backed cosine-similarity scan if not installed -- fine at the small
+# scale of a single-inspection demo, but chromadb persists and scales better.
+chromadb>=0.5.0
+
+# ---------------------------------------------------------------------------
+# Optional -- heavier, install only if you need the capability:
+#   sentence-transformers>=3.0.0   # real embeddings (src/retrieval/embeddings.py);
+#                                   # pulls in torch. Without it, search still
+#                                   # works via a deterministic hash-based
+#                                   # embedding -- good enough for exact/near
+#                                   # keyword matches, weaker on paraphrase.
+#   pytesseract>=0.3.10, Pillow     # OCR for scanned pages/images
+#                                   # (src/vision/ocr.py). Also needs the
+#                                   # Tesseract OCR binary installed
+#                                   # system-wide -- pip alone is not enough.
+#   paddleocr>=2.7.0                # alternative OCR engine, tried first if
+#                                   # installed; heavier than pytesseract.
+#   openai>=1.40.0                  # only if you prefer the vendor SDK over httpx
 #   transformers>=4.44.0
 #   torch>=2.4.0
 #   accelerate>=0.33.0

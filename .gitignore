@@ -27,6 +27,9 @@ logs/
 outputs/
 data/processed/*
 !data/processed/.gitkeep
+# Regenerated from SIH26117_Synthetic_Dataset_v2.zip by scripts/ingest_dataset.py
+data/synthetic/*
+!data/synthetic/.gitkeep
 
 # --- Editors / OS ------------------------------------------------
 .idea/
