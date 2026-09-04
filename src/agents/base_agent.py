@@ -138,6 +138,17 @@ class LLMAgent(Agent):
                 break
             name, arguments = call
             if not registry or not registry.has(name):
+                # Record this as a real (unresolved) ToolResult -- previously
+                # it only produced a conversational nudge and never became a
+                # ToolResult at all, so ``error_kind="not_found"`` (declared
+                # on the model) was unreachable and this failure was invisible
+                # to the audit trail, evidence tracking and the verifier.
+                result = ToolResult(
+                    tool=name, ok=False, error_kind="not_found",
+                    error=f"unknown tool: {name!r}", input=arguments,
+                )
+                tool_results.append(result)
+                unresolved_tools.add(name)
                 messages.append(Message(role=Role.ASSISTANT, content=last.content))
                 messages.append(
                     Message(role=Role.USER, content=f"Tool {name!r} is not available. Answer directly.")

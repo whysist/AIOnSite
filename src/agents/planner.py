@@ -37,7 +37,8 @@ _SYSTEM = (
     "{\n"
     '  "goal": "<one sentence>",\n'
     '  "steps": [\n'
-    '    {"id": "step_1", "agent": "researcher", "description": "...", "depends_on": []}\n'
+    '    {"id": "step_1", "agent": "researcher", "description": "...", '
+    '"depends_on": [], "criticality": "required"}\n'
     "  ],\n"
     '  "requirements": ["<one short sentence per concrete thing the final answer '
     'must contain or have done>"]\n'
@@ -46,7 +47,12 @@ _SYSTEM = (
     "end with a summarizer step. List 1-6 requirements; they are the checklist "
     "used to judge whether the task was actually completed, so be concrete "
     "(e.g. one requirement per fact that must be gathered, calculation that "
-    "must be performed, or document that must be consulted)."
+    "must be performed, or document that must be consulted). Set each step's "
+    '"criticality" to "optional" if the task can still be answered without '
+    'it succeeding, "critical" if the whole task is meaningless without it, '
+    'or "required" (the default) otherwise -- do not mark every step '
+    "required; steps that only gather background context are usually "
+    "optional."
 )
 
 
@@ -109,6 +115,12 @@ class Plan(BaseModel):
     def _validate_steps(cls, steps: list[PlanStep]) -> list[PlanStep]:
         if not steps:
             raise ValueError("plan has no steps")
+        if not 2 <= len(steps) <= 6:
+            # The prompt asks for 2-6 steps as a target, not a hard limit --
+            # a model that ignores it still produces a usable plan, so this
+            # is logged (visibly, unlike before) rather than rejected, which
+            # would only burn a retry attempt for no correctness benefit.
+            _log.info("plan_step_count_outside_target_range", count=len(steps))
         ids = [s.id for s in steps]
         if len(ids) != len(set(ids)):
             raise ValueError("duplicate step ids")
@@ -185,12 +197,19 @@ class Planner:
         return Plan(
             goal=goal,
             steps=[
+                # Background gathering is useful but not load-bearing: the
+                # task text itself usually already carries the values the
+                # analyst needs, so a failure here should degrade the node,
+                # not block the whole run (see Criticality in
+                # ``src/pipeline/models.py``).
                 PlanStep(id="step_1", agent="researcher",
-                         description=f"Gather information relevant to: {goal}", depends_on=[]),
+                         description=f"Gather information relevant to: {goal}", depends_on=[],
+                         criticality="optional"),
                 PlanStep(id="step_2", agent="analyst",
                          description="Analyse the gathered information and compute results.",
-                         depends_on=["step_1"]),
+                         depends_on=["step_1"], criticality="required"),
                 PlanStep(id="step_3", agent="summarizer",
-                         description="Produce the final verified answer.", depends_on=["step_2"]),
+                         description="Produce the final verified answer.", depends_on=["step_2"],
+                         criticality="required"),
             ],
         )

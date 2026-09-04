@@ -151,7 +151,13 @@ class ResultVerifier:
             outcome = (node_outcomes or {}).get(req.source_step_id or "")
             if outcome == "satisfied":
                 status = "satisfied"
-            elif outcome in ("blocked", "failed"):
+            elif outcome in ("blocked", "failed", "skipped"):
+                # "skipped" means the producing step never ran at all
+                # (an upstream dependency failed) -- that is exactly as
+                # unsatisfied as the step failing outright, and must not
+                # fall through to the weak keyword-overlap heuristic below,
+                # which could otherwise mark it "satisfied" purely because
+                # the final text happens to share a few words with it.
                 status = "blocked"
             elif outcome == "degraded":
                 status = "unsatisfied"

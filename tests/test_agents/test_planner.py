@@ -164,3 +164,34 @@ def test_extract_requirements_nonempty_for_fallback_plan():
     reqs = extract_requirements(plan)
     assert len(reqs) == 3
     assert all(r.required for r in reqs)
+
+
+def test_fallback_plan_marks_background_research_optional():
+    """Regression test: previously every step defaulted to 'required' with
+    no way to reach it (the planner prompt never mentioned criticality, and
+    the fallback plan never set it), so one failed research step could fail
+    the entire task even though the analyst/summarizer steps that actually
+    matter never depended on it succeeding.
+    """
+    plan = Planner.fallback_plan("Analyze something")
+    by_id = {s.id: s for s in plan.steps}
+    assert by_id["step_1"].criticality == "optional"
+    assert by_id["step_2"].criticality == "required"
+    assert by_id["step_3"].criticality == "required"
+
+
+def test_planner_system_prompt_tells_the_model_about_criticality():
+    from src.agents.planner import _SYSTEM
+
+    assert "criticality" in _SYSTEM
+    assert "optional" in _SYSTEM and "critical" in _SYSTEM
+
+
+def test_plan_accepts_step_count_outside_2_to_6_without_raising():
+    # The prompt states "2-6 steps" as a target, not a hard contract -- a
+    # model that ignores it must not be rejected (that only burns a retry
+    # for no correctness benefit); the count is logged, not enforced.
+    steps = [PlanStep(id=f"s{i}", description="x", depends_on=[f"s{i-1}"] if i else [])
+             for i in range(7)]
+    plan = Plan(goal="g", steps=steps)
+    assert len(plan.steps) == 7

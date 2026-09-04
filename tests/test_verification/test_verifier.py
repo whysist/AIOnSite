@@ -137,6 +137,26 @@ async def test_unresolved_tool_failure_forces_verification_failure():
     assert any(i.code == "unresolved_tool_failure" for i in res.issues)
 
 
+async def test_skipped_producing_step_is_blocked_not_falsely_satisfied():
+    """Regression test: a requirement whose producing step never ran (it was
+    SKIPPED because an upstream dependency failed, not FAILED itself) used to
+    fall through to a weak keyword-overlap heuristic on the final text --
+    which could mark it "satisfied" purely because the final answer happens
+    to share a few words with the requirement's description, even though the
+    step that was supposed to satisfy it never executed at all.
+    """
+    reqs = [TaskRequirement(id="req_1", description="Retrieve the relevant SOP", source_step_id="s1")]
+    res = await ResultVerifier(None).verify(
+        "task",
+        # deliberately shares words with the requirement description
+        "Final answer: no SOP was retrieved for this equipment.",
+        requirements=reqs, node_outcomes={"s1": "skipped"},
+    )
+    assert res.requirement_statuses["req_1"] == "blocked"
+    assert any(m.requirement_id == "req_1" for m in res.missing_requirements)
+    assert res.passed is False
+
+
 async def test_llm_critique_cannot_override_a_completeness_gap_back_to_pass():
     class OverOptimisticCritic(BaseLLM):
         provider_name = "critic"

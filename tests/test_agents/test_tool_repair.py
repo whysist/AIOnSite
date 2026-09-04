@@ -110,3 +110,30 @@ async def test_repair_exhaustion_marks_agent_result_not_ok():
     assert result.metadata["unresolved_tools"] == ["calculate_deviation"]
     assert any(entry.get("exhausted") for entry in result.metadata["repair_log"])
     assert all(not tr.ok for tr in result.tool_results)
+
+
+async def test_unknown_tool_name_is_recorded_as_a_not_found_tool_result():
+    """Regression test: calling a tool name the registry doesn't have used
+    to only produce a conversational nudge ('answer directly') with no
+    ToolResult ever created -- so ``error_kind="not_found"`` (declared on
+    the model) was unreachable, and the failure was invisible to the audit
+    trail, evidence tracking, and ``AgentResult.ok``. The agent must still
+    have a genuinely usable tool declared (``calculate_deviation``) so the
+    tool-call parser engages at all; the model then hallucinates a
+    different, unregistered tool name.
+    """
+    llm = _ScriptedLLM([
+        '{"tool": "search_knowledge_base", "arguments": {"query": "V-101 SOP"}}',
+        "No knowledge base is available, so I cannot retrieve the SOP.",
+    ])
+    agent = LLMAgent(name="researcher", system_prompt="s", llm=llm,
+                     tools=["calculate_deviation"])
+    result = await agent.execute("find the SOP", registry=_registry())
+
+    assert result.ok is False
+    assert result.metadata["unresolved_tools"] == ["search_knowledge_base"]
+    assert len(result.tool_results) == 1
+    not_found = result.tool_results[0]
+    assert not_found.tool == "search_knowledge_base"
+    assert not_found.ok is False
+    assert not_found.error_kind == "not_found"
