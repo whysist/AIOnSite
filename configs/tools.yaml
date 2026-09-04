@@ -1,2 +1,21 @@
+# Tool configuration (non-secret).
+#
+# `enabled` is the allow-list of built-in tools exposed to agents.
+# `permissions` is the allow-list of permission classes a deployment grants;
+# a tool needing a permission not listed here is skipped at registry build.
+
 tools:
-  enabled: []
+  enabled:
+    - calculator
+    - calculate_deviation
+    - text_stats
+    - json_parse
+    - read_file
+
+permissions:
+  - pure
+  - read_fs
+  # - network        # uncomment to allow network tools
+
+filesystem:
+  data_root: data

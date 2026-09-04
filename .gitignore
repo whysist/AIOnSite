@@ -1,5 +1,37 @@
-venv/
-__pycache__
-**/__pycache__
+# --- Python -------------------------------------------------------------
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
+# --- Virtual environments --------------------------------------------
+venv/
+.venv/
+env/
+ENV/
+
+# --- Secrets / local config ----------------------------------------
+.env
+.env.*
+!.env.example
+
+# --- Runtime artefacts --------------------------------------------
+logs/
+!logs/.gitkeep
+outputs/
+data/processed/*
+!data/processed/.gitkeep
+
+# --- Editors / OS ------------------------------------------------
+.idea/
+.vscode/
+.DS_Store
+
+# --- One-time bootstrap script (kept out of the tree) -----------
 init_project_existing_repo.py

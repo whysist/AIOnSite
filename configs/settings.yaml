@@ -1,3 +1,5 @@
+# Non-secret runtime configuration.  Secrets belong in `.env`.
+
 app:
   name: AIOnSite
   environment: development
@@ -8,9 +10,22 @@ logging:
 agent:
   default_agent: inspection_agent
   max_iterations: 10
+  max_tool_iterations: 3
+
+pipeline:
+  add_terminal_verifier: true
+  max_retries: 2
+  max_replans: 1
+  node_timeout_seconds: 120
 
 verification:
-  enabled: false
+  enabled: true
+  min_score: 0.5
+  use_llm_critique: true
 
 audit:
-  enabled: false
+  enabled: true
+
+security:
+  sovereign_mode: false        # overridden by SOVEREIGN_MODE in .env
+  allow_network_tools: false
