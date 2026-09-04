@@ -1,30 +1,17 @@
-"""Built-in, safe-by-default tools."""
+from .db_tool import EquipmentLookupTool, CalculateDeviationTool
+from .kb import KnowledgeBaseSearchTool, ExtractStructuredEvidenceTool
+from .document import ProcessDocumentTool
 
-from collections.abc import Callable
-from typing import Any
-
-from ..base_tool import BaseTool
-from .calculator import CalculatorTool, DeviationTool
-from .fs_reader import FileReadTool
-from .json_tool import JsonParseTool
-from .text_stats import TextStatsTool
-
-#: Zero-argument factories for the safe built-in tools.  Typed as callables
-#: (not ``type[BaseTool]``) so callers may instantiate them directly -- each
-#: entry is a concrete, non-abstract ``BaseTool`` subclass.
-BUILTIN_TOOLS: list[Callable[[], BaseTool[Any]]] = [
-    CalculatorTool,
-    DeviationTool,
-    TextStatsTool,
-    JsonParseTool,
-    FileReadTool,
-]
+# Backward-compatibility aliases
+RAGSearchTool = KnowledgeBaseSearchTool
+OCRTool = ProcessDocumentTool
 
 __all__ = [
-    "BUILTIN_TOOLS",
-    "CalculatorTool",
-    "DeviationTool",
-    "TextStatsTool",
-    "JsonParseTool",
-    "FileReadTool",
+    "EquipmentLookupTool",
+    "CalculateDeviationTool",
+    "KnowledgeBaseSearchTool",
+    "ExtractStructuredEvidenceTool",
+    "ProcessDocumentTool",
+    "RAGSearchTool",
+    "OCRTool"
 ]
