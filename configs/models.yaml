@@ -1,9 +1,32 @@
+# Model selection policy (non-secret).  Endpoints/keys come from `.env`.
+#
+# `default` is used when nothing more specific applies.  `routing` lets the
+# ModelRouter pick a model by task complexity tag; per-provider blocks give
+# a sensible model name for each backend.
+
 default:
-  provider: openai
-  model: gpt-4.1-mini
+  provider: ollama
+  model: qwen2.5:7b-instruct
   temperature: 0.2
 
+openai:
+  model: gpt-4.1-mini
+
+ollama:
+  model: qwen2.5:7b-instruct
+
+vllm:
+  model: qwen2.5-7b-instruct
+
 local:
-  provider: local
   model: local-model
-  base_url: http://localhost:8001/v1
+
+# Deterministic, config-based routing by complexity tag.
+routing:
+  simple:
+    model: qwen2.5:7b-instruct
+  complex:
+    model: qwen2.5:7b-instruct
+  confidential:
+    provider: ollama
+    model: qwen2.5:7b-instruct
