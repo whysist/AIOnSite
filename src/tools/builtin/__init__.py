@@ -1,30 +1,31 @@
-"""Built-in, safe-by-default tools."""
+"""Built-in deterministic tools."""
 
-from collections.abc import Callable
-from typing import Any
+from src.tools.builtin.calculator import CalculatorTool, DeviationTool
+from src.tools.builtin.fs_reader import FileReadTool
+from src.tools.builtin.json_tool import JsonParseTool
+from src.tools.builtin.text_stats import TextStatsTool
+from src.tools.builtin.industrial import (
+    ParameterComparisonTool,
+    RiskScoreTool,
+)
 
-from ..base_tool import BaseTool
-from .calculator import CalculatorTool, DeviationTool
-from .fs_reader import FileReadTool
-from .json_tool import JsonParseTool
-from .text_stats import TextStatsTool
-
-#: Zero-argument factories for the safe built-in tools.  Typed as callables
-#: (not ``type[BaseTool]``) so callers may instantiate them directly -- each
-#: entry is a concrete, non-abstract ``BaseTool`` subclass.
-BUILTIN_TOOLS: list[Callable[[], BaseTool[Any]]] = [
+BUILTIN_TOOLS = [
     CalculatorTool,
     DeviationTool,
-    TextStatsTool,
-    JsonParseTool,
     FileReadTool,
+    JsonParseTool,
+    TextStatsTool,
+    ParameterComparisonTool,
+    RiskScoreTool,
 ]
 
 __all__ = [
-    "BUILTIN_TOOLS",
     "CalculatorTool",
     "DeviationTool",
-    "TextStatsTool",
-    "JsonParseTool",
     "FileReadTool",
+    "JsonParseTool",
+    "TextStatsTool",
+    "ParameterComparisonTool",
+    "RiskScoreTool",
+    "BUILTIN_TOOLS",
 ]
