@@ -62,7 +62,7 @@ class LLMRequest(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
     @classmethod
-    def from_messages(cls, messages: list[Any], **kwargs: Any) -> "LLMRequest":
+    def from_messages(cls, messages: list[Any], **kwargs: Any) -> LLMRequest:
         return cls(messages=_coerce_messages(messages), **kwargs)
 
     def wire_messages(self) -> list[dict[str, str]]:
@@ -74,7 +74,7 @@ class UsageMetadata(BaseModel):
     completion_tokens: int = 0
     total_tokens: int = 0
 
-    def __add__(self, other: "UsageMetadata") -> "UsageMetadata":
+    def __add__(self, other: UsageMetadata) -> UsageMetadata:
         return UsageMetadata(
             prompt_tokens=self.prompt_tokens + other.prompt_tokens,
             completion_tokens=self.completion_tokens + other.completion_tokens,

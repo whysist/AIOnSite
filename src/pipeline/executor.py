@@ -147,7 +147,7 @@ class PipelineExecutor:
                     },
                 )
                 return
-            except (asyncio.TimeoutError, Exception) as exc:  # noqa: BLE001
+            except (TimeoutError, Exception) as exc:  # noqa: BLE001
                 last_error = (
                     f"timeout after {node.timeout_seconds}s"
                     if isinstance(exc, asyncio.TimeoutError)

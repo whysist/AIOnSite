@@ -63,7 +63,7 @@ class Agent:
         self.max_tool_iterations = max_tool_iterations
         self.metadata = metadata or {}
 
-    def with_llm(self, llm: BaseLLM) -> "Agent":
+    def with_llm(self, llm: BaseLLM) -> Agent:
         """Return a shallow copy bound to *llm* (used by the router)."""
         clone = self.__class__.__new__(self.__class__)
         clone.__dict__.update(self.__dict__)

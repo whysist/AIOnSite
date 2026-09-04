@@ -119,7 +119,7 @@ class Settings(BaseSettings):
         return upper
 
     @model_validator(mode="after")
-    def _enforce_sovereign_mode(self) -> "Settings":
+    def _enforce_sovereign_mode(self) -> Settings:
         """A cloud provider must never be selected while sovereign mode is on."""
         if self.sovereign_mode and self.llm_provider not in _LOCAL_PROVIDERS:
             raise ValueError(

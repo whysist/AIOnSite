@@ -134,7 +134,7 @@ class Pipeline(BaseModel):
 
     # ------------------------------------------------------------------
     @model_validator(mode="after")
-    def _check_integrity(self) -> "Pipeline":
+    def _check_integrity(self) -> Pipeline:
         ids = [n.id for n in self.nodes]
         if len(ids) != len(set(ids)):
             raise ValueError("duplicate node ids in pipeline")

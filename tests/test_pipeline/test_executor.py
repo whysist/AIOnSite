@@ -12,8 +12,8 @@ from src.pipeline.models import (
     Pipeline,
     PipelineNode,
     RetryPolicy,
+    AgentResult
 )
-from src.pipeline.models import AgentResult
 from src.pipeline.state import ExecutionContext
 from src.verification.verifier import ResultVerifier
 

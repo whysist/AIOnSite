@@ -17,14 +17,14 @@ if TYPE_CHECKING:
     from ..core.config import LLMProvider, Settings
 
 
-def _normalise(provider: "str | LLMProvider") -> str:
+def _normalise(provider: str | LLMProvider) -> str:
     return getattr(provider, "value", str(provider)).lower()
 
 
 def create_llm(
-    settings: "Settings | None" = None,
+    settings: Settings | None = None,
     *,
-    provider: "str | LLMProvider | None" = None,
+    provider: str | LLMProvider | None = None,
     model: str | None = None,
 ) -> BaseLLM:
     """Build the configured LLM provider.
