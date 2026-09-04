@@ -94,7 +94,9 @@ async def create_task(request: TaskRequest) -> TaskCreatedResponse:
     return TaskCreatedResponse(
         execution_id=ctx.execution_id,
         status=ctx.status.value,
+        task_status=ctx.task_status.value,
         final_answer=ctx.final_answer,
+        final_answer_degraded=ctx.final_answer_degraded,
         verification=(
             ctx.final_verification.model_dump() if ctx.final_verification else None
         ),
@@ -120,11 +122,13 @@ async def get_task(execution_id: str) -> ExecutionResponse:
     return ExecutionResponse(
         execution_id=ctx.execution_id,
         status=ctx.status.value,
+        task_status=ctx.task_status.value,
         task=ctx.task,
         sovereign_mode=ctx.sovereign_mode,
         confidential=ctx.confidential,
         duration_ms=ctx.duration_ms,
         final_answer=ctx.final_answer,
+        final_answer_degraded=ctx.final_answer_degraded,
         final_verification=(
             ctx.final_verification.model_dump() if ctx.final_verification else None
         ),

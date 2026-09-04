@@ -13,8 +13,11 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from ..state.evidence import Evidence
 from ..verification.schemas import VerificationResult
 from .models import AgentResult, ExecutionStatus, Pipeline, ToolResult
+from .requirements import TaskRequirement
+from .task_status import TaskStatus
 
 
 class PipelineState(BaseModel):
@@ -22,6 +25,15 @@ class PipelineState(BaseModel):
 
     node_results: dict[str, AgentResult] = Field(default_factory=dict)
     tool_results: list[ToolResult] = Field(default_factory=list)
+    # Only the tool calls that failed and were *not* recovered by the
+    # in-agent repair loop (see ``AgentResult.metadata["unresolved_tools"]``
+    # in ``src/agents/base_agent.py``) -- i.e. calls where retrying with
+    # corrected arguments either wasn't attempted (execution error) or was
+    # exhausted (validation error). A transient failure that a later repair
+    # attempt fixed does NOT appear here, so the verifier only ever sees
+    # genuine, unresolved gaps.
+    unresolved_tool_failures: list[ToolResult] = Field(default_factory=list)
+    evidence: dict[str, Evidence] = Field(default_factory=dict)
     verifications: dict[str, VerificationResult] = Field(default_factory=dict)
     errors: list[dict[str, Any]] = Field(default_factory=list)
     scratch: dict[str, Any] = Field(default_factory=dict)
@@ -29,6 +41,18 @@ class PipelineState(BaseModel):
     def record(self, node_id: str, result: AgentResult) -> None:
         self.node_results[node_id] = result
         self.tool_results.extend(result.tool_results)
+        unresolved_names = set(result.metadata.get("unresolved_tools") or [])
+        for name in unresolved_names:
+            failing = [tr for tr in result.tool_results if tr.tool == name and not tr.ok]
+            if failing:
+                self.unresolved_tool_failures.append(failing[-1])
+
+    def record_evidence(self, evidence: Evidence) -> None:
+        self.evidence[evidence.id] = evidence
+
+    def evidence_for(self, node_ids: list[str]) -> list[Evidence]:
+        ids = set(node_ids)
+        return [e for e in self.evidence.values() if e.producer_node in ids]
 
     def outputs_for(self, node_ids: list[str]) -> dict[str, str]:
         return {
@@ -54,7 +78,16 @@ class ExecutionContext(BaseModel):
     pipeline: Pipeline | None = None
     state: PipelineState = Field(default_factory=PipelineState)
 
+    requirements: list[TaskRequirement] = Field(default_factory=list)
+    # Defaults pessimistic (INCOMPLETE), not COMPLETED: task completion must
+    # be earned by satisfying requirements/verification, never assumed by a
+    # field that was simply never updated.
+    task_status: TaskStatus = TaskStatus.INCOMPLETE
+    plan_degraded: bool = False
+    plan_degraded_reason: str | None = None
+
     final_answer: str | None = None
+    final_answer_degraded: bool = False
     final_verification: VerificationResult | None = None
     replans: int = 0
     error: str | None = None
@@ -86,7 +119,12 @@ class ExecutionContext(BaseModel):
             "duration_ms": self.duration_ms,
             "replans": self.replans,
             "error": self.error,
+            "task_status": self.task_status.value,
+            "plan_degraded": self.plan_degraded,
+            "plan_degraded_reason": self.plan_degraded_reason,
+            "requirements": [r.model_dump() for r in self.requirements],
             "final_answer": self.final_answer,
+            "final_answer_degraded": self.final_answer_degraded,
             "final_verification": (
                 self.final_verification.model_dump() if self.final_verification else None
             ),
@@ -97,4 +135,5 @@ class ExecutionContext(BaseModel):
             "verifications": {
                 nid: v.model_dump() for nid, v in self.state.verifications.items()
             },
+            "evidence": {eid: e.model_dump() for eid, e in self.state.evidence.items()},
         }

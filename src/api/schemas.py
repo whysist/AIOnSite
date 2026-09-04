@@ -19,7 +19,13 @@ class TaskRequest(BaseModel):
 class TaskCreatedResponse(BaseModel):
     execution_id: str
     status: str
+    # Separate from ``status`` (did the pipeline finish running?): whether
+    # the task was actually accomplished. The two can legitimately diverge,
+    # e.g. status=completed with task_status=incomplete when required
+    # evidence went missing -- see src/pipeline/task_status.py.
+    task_status: str
     final_answer: str | None = None
+    final_answer_degraded: bool = False
     verification: dict[str, Any] | None = None
     error: str | None = None
 
@@ -27,11 +33,13 @@ class TaskCreatedResponse(BaseModel):
 class ExecutionResponse(BaseModel):
     execution_id: str
     status: str
+    task_status: str
     task: str
     sovereign_mode: bool
     confidential: bool
     duration_ms: float | None = None
     final_answer: str | None = None
+    final_answer_degraded: bool = False
     final_verification: dict[str, Any] | None = None
     error: str | None = None
     node_results: dict[str, Any] = Field(default_factory=dict)

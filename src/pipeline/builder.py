@@ -11,6 +11,7 @@ from ..agents.planner import Plan
 from ..core.config import Settings, get_settings
 from .graph import PipelineGraph
 from .models import (
+    Criticality,
     NodeType,
     Pipeline,
     PipelineEdge,
@@ -53,6 +54,7 @@ def build_pipeline(
             require_local=require_local or settings.sovereign_mode,
             retry_policy=retry,
             timeout_seconds=settings.node_timeout_seconds,
+            criticality=Criticality(step.criticality),
         )
         nodes.append(node)
         for dep in step.depends_on:

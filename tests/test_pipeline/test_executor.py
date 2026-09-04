@@ -8,11 +8,14 @@ from src.core.exceptions import PipelineExecutionError
 from src.pipeline.executor import PipelineExecutor
 from src.pipeline.models import (
     AgentResult,
+    Criticality,
+    NodeOutcome,
     NodeStatus,
     NodeType,
     Pipeline,
     PipelineNode,
     RetryPolicy,
+    ToolResult,
 )
 from src.pipeline.state import ExecutionContext
 from src.verification.verifier import ResultVerifier
@@ -48,11 +51,55 @@ def _executor(library):
     ), settings
 
 
-def _node(nid, agent, deps=(), ntype=NodeType.CUSTOM, retries=0):
+def _node(nid, agent, deps=(), ntype=NodeType.CUSTOM, retries=0, criticality=Criticality.REQUIRED):
     return PipelineNode(
         id=nid, name=nid, type=ntype, agent=agent, depends_on=list(deps),
         retry_policy=RetryPolicy(max_retries=retries, backoff_seconds=0),
+        criticality=criticality,
     )
+
+
+class ToolFailAgent(Agent):
+    """Returns without raising -- ``AgentResult.ok=False`` with an
+    unresolved tool failure, simulating a repair-exhausted tool call. Used
+    to test that node outcome/status react to ``result.ok``/``tool_results``
+    directly, not only to exceptions."""
+
+    def __init__(self, name, *, tool_name="calculate_deviation"):
+        super().__init__(name=name)
+        self.tool_name = tool_name
+
+    def with_llm(self, llm):
+        return self
+
+    async def execute(self, task, *, context=None, registry=None):
+        tr = ToolResult(tool=self.tool_name, ok=False, error_kind="validation", error="bad args")
+        return AgentResult(
+            agent=self.name, ok=False, output="could not complete the calculation",
+            tool_results=[tr],
+            metadata={
+                "unresolved_tools": [self.tool_name],
+                "repair_log": [
+                    {"tool": self.tool_name, "attempt": 1, "error": "bad args", "exhausted": True}
+                ],
+            },
+        )
+
+
+class ToolOkAgent(Agent):
+    """Succeeds with one tool call, for evidence-tracking tests."""
+
+    def __init__(self, name, *, tool_name="read_file", output="file contents"):
+        super().__init__(name=name)
+        self.tool_name = tool_name
+        self.output = output
+
+    def with_llm(self, llm):
+        return self
+
+    async def execute(self, task, *, context=None, registry=None):
+        tr = ToolResult(tool=self.tool_name, ok=True, output=self.output)
+        return AgentResult(agent=self.name, ok=True, output="done", tool_results=[tr])
 
 
 async def test_sequential_pipeline_completes_in_order():
@@ -122,3 +169,78 @@ async def test_verifier_node_produces_verification_result():
     await ex.run(ctx, pipeline)
     assert "v" in ctx.state.verifications
     assert ctx.final_verification is not None
+
+
+# ---------------------------------------------------------------------
+# Criticality gating: a node whose agent returns ok=False (unresolved tool
+# failure) without raising an exception must not be silently reported as
+# COMPLETED -- this is the direct fix for the reported bug where
+# AgentResult.ok was computed but never read by the executor.
+
+
+async def test_required_tool_failure_blocks_node_and_downstream():
+    lib = {"bad": ToolFailAgent("bad"), "down": FakeAgent("down")}
+    pipeline = Pipeline(goal="g", nodes=[
+        _node("bad", "bad"),  # default criticality=REQUIRED
+        _node("down", "down", ["bad"]),
+    ])
+    ex, _ = _executor(lib)
+    ctx = ExecutionContext(task="t")
+    with pytest.raises(PipelineExecutionError):
+        await ex.run(ctx, pipeline)
+    node = pipeline.node("bad")
+    assert node.status is NodeStatus.FAILED
+    assert node.outcome is NodeOutcome.FAILED
+    assert pipeline.node("down").status is NodeStatus.SKIPPED
+    assert lib["down"].calls == 0
+
+
+async def test_optional_tool_failure_degrades_but_allows_continuation():
+    lib = {"opt": ToolFailAgent("opt"), "down": FakeAgent("down")}
+    pipeline = Pipeline(goal="g", nodes=[
+        _node("opt", "opt", criticality=Criticality.OPTIONAL),
+        _node("down", "down", ["opt"]),
+    ])
+    ex, _ = _executor(lib)
+    ctx = ExecutionContext(task="t")
+    await ex.run(ctx, pipeline)
+    node = pipeline.node("opt")
+    assert node.status is NodeStatus.COMPLETED
+    assert node.outcome is NodeOutcome.DEGRADED
+    assert pipeline.node("down").status is NodeStatus.COMPLETED
+    assert lib["down"].calls == 1
+
+
+async def test_critical_tool_failure_marks_outcome_blocked():
+    lib = {"crit": ToolFailAgent("crit")}
+    pipeline = Pipeline(goal="g", nodes=[_node("crit", "crit", criticality=Criticality.CRITICAL)])
+    ex, _ = _executor(lib)
+    ctx = ExecutionContext(task="t")
+    with pytest.raises(PipelineExecutionError):
+        await ex.run(ctx, pipeline)
+    assert pipeline.node("crit").outcome is NodeOutcome.BLOCKED
+    assert pipeline.node("crit").status is NodeStatus.FAILED
+
+
+async def test_agent_result_ok_true_and_no_failures_is_satisfied():
+    lib = {"a": FakeAgent("a")}
+    pipeline = Pipeline(goal="g", nodes=[_node("a", "a")])
+    ex, _ = _executor(lib)
+    ctx = ExecutionContext(task="t")
+    await ex.run(ctx, pipeline)
+    assert pipeline.node("a").outcome is NodeOutcome.SATISFIED
+
+
+async def test_successful_tool_call_is_recorded_as_evidence():
+    lib = {"r": ToolOkAgent("r")}
+    pipeline = Pipeline(goal="g", nodes=[_node("r", "r")])
+    ex, _ = _executor(lib)
+    ctx = ExecutionContext(task="t")
+    await ex.run(ctx, pipeline)
+    assert len(ctx.state.evidence) == 1
+    ev = next(iter(ctx.state.evidence.values()))
+    assert ev.producer_node == "r"
+    assert ev.producer_tool == "read_file"
+    assert ev.content == "file contents"
+    # the ToolResult links back to the evidence it produced
+    assert ctx.state.node_results["r"].tool_results[0].evidence_id == ev.id

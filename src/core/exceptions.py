@@ -41,6 +41,35 @@ class ProviderError(LLMError):
     code = "provider_error"
 
 
+class ProviderConnectionError(ProviderError):
+    """The provider's endpoint refused the connection or could not be resolved.
+
+    Distinct from :class:`ProviderTimeoutError`: this means the server is not
+    there to talk to at all (e.g. ``ollama serve`` is not running), whereas a
+    timeout means it *is* there but did not respond in time (e.g. the model is
+    still loading). Conflating the two produces a misleading "is it running?"
+    message even when the server is up and just slow.
+    """
+
+    code = "provider_connection_error"
+
+
+class ProviderTimeoutError(ProviderError):
+    """The provider did not respond within the configured timeout.
+
+    Callers should not treat this identically to a connection failure: a slow
+    local model load is expected behaviour, not evidence the server is down.
+    """
+
+    code = "provider_timeout_error"
+
+
+class ProviderMalformedResponseError(ProviderError):
+    """The provider responded, but the response body could not be parsed."""
+
+    code = "provider_malformed_response_error"
+
+
 class SovereigntyError(AIOnSiteError):
     """An operation was blocked because it would violate sovereign / local-only policy."""
 

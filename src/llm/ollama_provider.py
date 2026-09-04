@@ -11,7 +11,12 @@ from typing import Any
 
 import httpx
 
-from ..core.exceptions import ProviderError
+from ..core.exceptions import (
+    ProviderConnectionError,
+    ProviderError,
+    ProviderMalformedResponseError,
+    ProviderTimeoutError,
+)
 from .base import BaseLLM
 from .schemas import LLMRequest, LLMResponse, UsageMetadata
 
@@ -25,10 +30,17 @@ class OllamaProvider(BaseLLM):
         base_url: str = "http://localhost:11434",
         model: str | None = None,
         timeout: float = 60.0,
+        connect_timeout: float = 10.0,
     ) -> None:
         super().__init__(model=model, is_local=True)
         self._base_url = base_url.rstrip("/")
-        self._client = httpx.AsyncClient(base_url=self._base_url, timeout=timeout)
+        # Read timeout (model generation) and connect timeout (server
+        # reachability) are deliberately independent: a slow local model
+        # load should not be mistaken for a server that is not running.
+        self._client = httpx.AsyncClient(
+            base_url=self._base_url,
+            timeout=httpx.Timeout(timeout, connect=connect_timeout),
+        )
 
     async def _complete(self, request: LLMRequest) -> LLMResponse:
         if not request.model:
@@ -50,6 +62,25 @@ class OllamaProvider(BaseLLM):
 
         try:
             resp = await self._client.post("/api/chat", json=payload)
+        except httpx.TimeoutException as exc:
+            # Covers connect-timeout, read-timeout, write-timeout and
+            # pool-timeout alike: the server may simply still be loading the
+            # model. This is NOT "is it running?" -- do not say so.
+            raise ProviderTimeoutError(
+                f"Ollama at {self._base_url} did not respond within the configured "
+                "timeout. The model may still be loading (first request after "
+                "`ollama pull`/server start can be slow) -- consider raising "
+                "llm_read_timeout_seconds if this persists.  "
+                f"({type(exc).__name__}: {exc})",
+                details={"base_url": self._base_url, "model": request.model},
+            ) from exc
+        except httpx.ConnectError as exc:
+            raise ProviderConnectionError(
+                "Cannot reach Ollama at "
+                f"{self._base_url}. Is it running?  Try: `ollama serve` and "
+                f"`ollama pull {request.model}`.  ({exc})",
+                details={"base_url": self._base_url, "model": request.model},
+            ) from exc
         except httpx.RequestError as exc:
             raise ProviderError(
                 "Cannot reach Ollama at "
@@ -70,7 +101,13 @@ class OllamaProvider(BaseLLM):
                 details={"status_code": resp.status_code},
             )
 
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise ProviderMalformedResponseError(
+                f"Ollama returned a response that was not valid JSON: {exc}",
+                details={"body": resp.text[:400]},
+            ) from exc
         content = (data.get("message") or {}).get("content", "")
         prompt_tokens = data.get("prompt_eval_count", 0)
         completion_tokens = data.get("eval_count", 0)

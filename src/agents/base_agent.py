@@ -51,6 +51,7 @@ class Agent:
         temperature: float = 0.2,
         max_tokens: int = 2000,
         max_tool_iterations: int = 3,
+        max_repair_attempts: int = 2,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         self.name = name
@@ -61,6 +62,10 @@ class Agent:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.max_tool_iterations = max_tool_iterations
+        # Bounded per-tool retry budget for argument-validation repair (see
+        # ``LLMAgent.execute``): distinct from ``max_tool_iterations``, which
+        # bounds the whole tool-use loop across all tools.
+        self.max_repair_attempts = max_repair_attempts
         self.metadata = metadata or {}
 
     def with_llm(self, llm: BaseLLM) -> Agent:
@@ -111,13 +116,15 @@ class LLMAgent(Agent):
         user_content = _render_task(task, context)
         if usable_tools and registry is not None:
             specs = "\n".join(
-                f"- {registry.get(t).name}: {registry.get(t).description}"
-                for t in usable_tools
+                _render_tool_schema(registry.get(t).spec()) for t in usable_tools
             )
             user_content += "\n\n" + self._TOOL_INSTRUCTIONS.format(tools=specs)
         messages.append(Message(role=Role.USER, content=user_content))
 
         tool_results: list[ToolResult] = []
+        repair_attempts: dict[str, int] = {}
+        repair_log: list[dict[str, Any]] = []
+        unresolved_tools: set[str] = set()
         last = None
         for _ in range(self.max_tool_iterations + 1):
             last = await self.llm.generate(
@@ -139,6 +146,49 @@ class LLMAgent(Agent):
             result = await registry.call(name, **arguments)
             tool_results.append(result)
             messages.append(Message(role=Role.ASSISTANT, content=last.content))
+
+            if not result.ok and result.error_kind == "validation":
+                attempts = repair_attempts.get(name, 0)
+                if attempts < self.max_repair_attempts:
+                    repair_attempts[name] = attempts + 1
+                    repair_log.append(
+                        {"tool": name, "attempt": attempts + 1, "error": result.error}
+                    )
+                    messages.append(
+                        Message(
+                            role=Role.TOOL,
+                            content=_repair_feedback(name, result),
+                            name=name,
+                        )
+                    )
+                    continue
+                unresolved_tools.add(name)
+                repair_log.append(
+                    {
+                        "tool": name, "attempt": attempts + 1,
+                        "error": result.error, "exhausted": True,
+                    }
+                )
+                messages.append(
+                    Message(
+                        role=Role.TOOL,
+                        content=(
+                            f"Call to {name!r} failed argument validation again: "
+                            f"{result.error}. No further repair attempts remain for "
+                            "this tool in this step -- proceed without it and state "
+                            "plainly that this could not be completed."
+                        ),
+                        name=name,
+                    )
+                )
+                continue
+
+            if not result.ok:
+                # Non-validation failure (the tool itself raised): not a
+                # repairable argument-shape problem, so don't spend repair
+                # budget on it -- record as unresolved immediately.
+                unresolved_tools.add(name)
+
             messages.append(
                 Message(
                     role=Role.TOOL,
@@ -153,7 +203,7 @@ class LLMAgent(Agent):
         assert last is not None
         return AgentResult(
             agent=self.name,
-            ok=True,
+            ok=not unresolved_tools,
             output=last.content.strip(),
             tool_results=tool_results,
             model=last.model,
@@ -161,8 +211,67 @@ class LLMAgent(Agent):
             prompt_tokens=last.usage.prompt_tokens,
             completion_tokens=last.usage.completion_tokens,
             duration_ms=(time.perf_counter() - started) * 1000,
-            metadata={"tool_calls": len(tool_results)},
+            metadata={
+                "tool_calls": len(tool_results),
+                "repair_log": repair_log,
+                "unresolved_tools": sorted(unresolved_tools),
+            },
         )
+
+
+# ----------------------------------------------------------------------
+def _render_tool_schema(spec: dict[str, Any]) -> str:
+    """Render a tool's real parameter contract for the prompt.
+
+    Previously only ``name`` + free-text ``description`` reached the model
+    (see the old inline ``f"- {t.name}: {t.description}"`` this replaces) --
+    the model had to guess argument names from prose. ``BaseTool.spec()``
+    already exposes the exact Pydantic JSON schema; this just formats it
+    compactly enough for a small local model's context rather than dumping
+    raw JSON Schema.
+    """
+    input_schema = spec.get("input_schema") or {}
+    properties = input_schema.get("properties") or {}
+    required = set(input_schema.get("required") or [])
+    lines = [f"- {spec['name']}: {spec['description']}"]
+    if not properties:
+        lines.append("    arguments: (none)")
+    for pname, pschema in properties.items():
+        ptype = pschema.get("type", "any")
+        if pname in required:
+            marker = "required"
+        else:
+            default = pschema.get("default")
+            marker = f"optional, default={default!r}"
+        desc = pschema.get("description", "")
+        suffix = f" -- {desc}" if desc else ""
+        lines.append(f"    - {pname} ({ptype}, {marker}){suffix}")
+    return "\n".join(lines)
+
+
+def _repair_feedback(name: str, result: ToolResult) -> str:
+    """Structured correction prompt for a tool call that failed validation.
+
+    Distinct from the generic ``{"ok": false, ...}`` tool message used for
+    other failures: this names exactly which arguments are required and
+    what was wrong, so the model has a concrete target to correct rather
+    than having to re-derive the schema from the error text alone.
+    """
+    schema = result.expected_schema or {}
+    required = schema.get("required") or []
+    properties = schema.get("properties") or {}
+    lines = [
+        f"Your call to {name!r} failed argument validation: {result.error}",
+        "Required arguments: " + (", ".join(required) if required else "(none)"),
+    ]
+    if properties:
+        types = {pname: pschema.get("type", "any") for pname, pschema in properties.items()}
+        lines.append("Parameter types: " + json.dumps(types))
+    lines.append(
+        "Call the tool again with corrected arguments as a JSON object "
+        '(e.g. {"tool": "' + name + '", "arguments": {...}}).'
+    )
+    return "\n".join(lines)
 
 
 # ----------------------------------------------------------------------

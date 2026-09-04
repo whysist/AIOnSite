@@ -32,7 +32,9 @@ from .core.logging import bind_execution, clear_execution, get_logger
 from .pipeline.builder import build_pipeline
 from .pipeline.executor import PipelineExecutor
 from .pipeline.models import ExecutionStatus, NodeStatus, PipelineNode
+from .pipeline.requirements import RequirementStatus, extract_requirements
 from .pipeline.state import ExecutionContext
+from .pipeline.task_status import TaskStatus, compute_task_status
 from .tools.registry import ToolRegistry, default_registry
 from .verification.verifier import ResultVerifier
 
@@ -89,6 +91,7 @@ class Orchestrator:
         except AIOnSiteError as exc:
             ctx.error = exc.message
             ctx.mark_finished(ExecutionStatus.FAILED)
+            ctx.task_status = TaskStatus.FAILED
             self.audit.record(
                 ctx.execution_id, AuditEventType.EXECUTION_FAILED, component="orchestrator",
                 status="failed", message=exc.message, metadata=exc.details,
@@ -96,6 +99,7 @@ class Orchestrator:
         except Exception as exc:  # noqa: BLE001
             ctx.error = f"{type(exc).__name__}: {exc}"
             ctx.mark_finished(ExecutionStatus.FAILED)
+            ctx.task_status = TaskStatus.FAILED
             self.audit.record(
                 ctx.execution_id, AuditEventType.EXECUTION_FAILED, component="orchestrator",
                 status="failed", message=ctx.error,
@@ -113,14 +117,29 @@ class Orchestrator:
             require_local=confidential or self.settings.sovereign_mode,
         )
         planner_llm, _ = router.get_llm(plan_node)
-        planner = Planner(planner_llm, max_attempts=self.settings.max_replans + 1)
+        planner = Planner(
+            planner_llm,
+            max_attempts=self.settings.max_replans + 1,
+            backoff_seconds=self.settings.plan_retry_backoff_seconds,
+        )
 
         plan = await planner.plan(ctx.task)
         ctx.plan = plan.model_dump()
+        if plan.degraded:
+            ctx.plan_degraded = True
+            ctx.plan_degraded_reason = plan.degraded_reason
+            self.audit.record(
+                ctx.execution_id, AuditEventType.PLAN_FAILED, component="planner",
+                status="degraded",
+                message=plan.degraded_reason or "planner fell back to the deterministic plan",
+                metadata={"goal": plan.goal},
+            )
         self.audit.record(
             ctx.execution_id, AuditEventType.PLAN_CREATED, component="planner",
-            message=plan.goal, metadata={"steps": [s.model_dump() for s in plan.steps]},
+            message=plan.goal,
+            metadata={"steps": [s.model_dump() for s in plan.steps], "degraded": plan.degraded},
         )
+        ctx.requirements = extract_requirements(plan)
 
         pipeline = build_pipeline(
             plan, settings=self.settings,
@@ -142,12 +161,6 @@ class Orchestrator:
         )
         await executor.run(ctx, pipeline)
 
-        if ctx.final_answer is not None:
-            self.audit.record(
-                ctx.execution_id, AuditEventType.FINAL_ANSWER_GENERATED,
-                component="orchestrator", message=ctx.final_answer[:200],
-            )
-
         failed = [n.id for n in pipeline.nodes if n.status is NodeStatus.FAILED]
         if ctx.final_answer is None:
             status = ExecutionStatus.FAILED
@@ -159,6 +172,51 @@ class Orchestrator:
         else:
             status = ExecutionStatus.COMPLETED
         ctx.mark_finished(status)
+
+        # Execution status only says the DAG finished; task status says
+        # whether the task was actually accomplished -- the two are tracked
+        # separately on purpose (execution COMPLETED + task INCOMPLETE is a
+        # valid, expected combination when required evidence went missing).
+        ctx.task_status = compute_task_status(ctx.requirements, ctx.final_verification, status)
+
+        missing_descriptions: list[str] = [
+            r.description for r in ctx.requirements
+            if r.required and r.status is not RequirementStatus.SATISFIED
+        ]
+        if ctx.final_verification:
+            missing_descriptions += [
+                m.description for m in ctx.final_verification.missing_requirements
+            ]
+        missing_descriptions = list(dict.fromkeys(missing_descriptions))  # de-dup, keep order
+
+        if ctx.task_status is not TaskStatus.COMPLETED and ctx.final_answer is not None:
+            # Deterministic (not another LLM call, so it cannot itself fail
+            # or hallucinate) annotation making the gap explicit rather than
+            # letting a confident-sounding partial answer stand unqualified.
+            prefix = f"[INSPECTION STATUS: {ctx.task_status.value.upper()}]\n"
+            if missing_descriptions:
+                prefix += "Missing or unsatisfied: " + "; ".join(missing_descriptions) + "\n"
+            prefix += (
+                "The following is the best available partial result; treat any "
+                "conclusion below as provisional, not a verified recommendation.\n\n"
+            )
+            ctx.final_answer = prefix + ctx.final_answer
+            ctx.final_answer_degraded = True
+
+        if ctx.final_answer is not None:
+            self.audit.record(
+                ctx.execution_id, AuditEventType.FINAL_ANSWER_GENERATED,
+                component="orchestrator", message=ctx.final_answer[:200],
+            )
+
+        self.audit.record(
+            ctx.execution_id, AuditEventType.TASK_STATUS_DETERMINED, component="orchestrator",
+            status=ctx.task_status.value, message=f"task_status={ctx.task_status.value}",
+            metadata={
+                "missing_requirements": missing_descriptions,
+                "plan_degraded": ctx.plan_degraded,
+            },
+        )
         self.audit.record(
             ctx.execution_id, AuditEventType.EXECUTION_COMPLETED, component="orchestrator",
             status=status.value, message=f"duration_ms={ctx.duration_ms}",
