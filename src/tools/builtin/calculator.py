@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import operator
+from collections.abc import Callable
 from typing import ClassVar
 
 from pydantic import BaseModel, Field
@@ -18,7 +19,9 @@ from pydantic import BaseModel, Field
 from ...core.exceptions import ToolExecutionError
 from ..base_tool import BaseTool, ToolPermission
 
-_ALLOWED_BINOPS = {
+# Restricted operator tables.  Values are plain numeric callables; the
+# explicit types let mypy see each lookup result as callable.
+_ALLOWED_BINOPS: dict[type[ast.operator], Callable[[float, float], float]] = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
     ast.Mult: operator.mul,
@@ -27,7 +30,10 @@ _ALLOWED_BINOPS = {
     ast.Mod: operator.mod,
     ast.Pow: operator.pow,
 }
-_ALLOWED_UNARY = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+_ALLOWED_UNARY: dict[type[ast.unaryop], Callable[[float], float]] = {
+    ast.UAdd: operator.pos,
+    ast.USub: operator.neg,
+}
 
 
 def _eval_node(node: ast.AST) -> float:
@@ -56,7 +62,7 @@ class _CalcOut(BaseModel):
     result: float
 
 
-class CalculatorTool(BaseTool):
+class CalculatorTool(BaseTool[_CalcIn]):
     name = "calculator"
     description = "Evaluate a basic arithmetic expression (+ - * / // % **). No variables or functions."
     permissions: ClassVar = (ToolPermission.PURE,)
@@ -91,7 +97,7 @@ class _DevOut(BaseModel):
     label: str | None = None
 
 
-class DeviationTool(BaseTool):
+class DeviationTool(BaseTool[_DevIn]):
     name = "calculate_deviation"
     description = (
         "Compute absolute and percentage deviation of an observed value from an "

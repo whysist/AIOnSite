@@ -110,11 +110,12 @@ class ResultVerifier:
 
         rule_result = _score_from_issues(issues)
 
-        if self._llm is None:
+        llm = self._llm
+        if llm is None:
             return rule_result
 
         try:
-            critique = await self._llm_critique(task, text or json.dumps(structured))
+            critique = await self._llm_critique(llm, task, text or json.dumps(structured))
         except Exception as exc:  # noqa: BLE001 - never fail the run on critique error
             _log.warning("llm_critique_failed", error=str(exc))
             return rule_result
@@ -122,8 +123,10 @@ class ResultVerifier:
         return _merge(rule_result, critique, self._min_score)
 
     # ------------------------------------------------------------------
-    async def _llm_critique(self, task: str, result: str) -> VerificationResult:
-        raw = await self._llm.generate_json(
+    async def _llm_critique(
+        self, llm: BaseLLM, task: str, result: str
+    ) -> VerificationResult:
+        raw = await llm.generate_json(
             [
                 BaseLLM.system(_CRITIQUE_SYSTEM),
                 BaseLLM.user(f"TASK:\n{task}\n\nRESULT:\n{result}"),

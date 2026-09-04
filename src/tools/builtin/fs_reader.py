@@ -30,7 +30,7 @@ class _Out(BaseModel):
     content: str
 
 
-class FileReadTool(BaseTool):
+class FileReadTool(BaseTool[_In]):
     name = "read_file"
     description = "Read a UTF-8 text file located under the project data directory."
     permissions: ClassVar = (ToolPermission.READ_FILESYSTEM,)

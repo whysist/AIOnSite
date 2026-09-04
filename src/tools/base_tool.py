@@ -12,7 +12,7 @@ from __future__ import annotations
 import enum
 import time
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Generic, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -22,6 +22,11 @@ from ..pipeline.models import ToolResult
 
 _log = get_logger("tools")
 
+#: The tool's validated-input model.  A concrete tool binds this by
+#: subclassing ``BaseTool[MyInputModel]`` so that :meth:`_run` receives the
+#: precise model type instead of a bare :class:`~pydantic.BaseModel`.
+TInput = TypeVar("TInput", bound=BaseModel)
+
 
 class ToolPermission(str, enum.Enum):
     PURE = "pure"                 # no side effects, no I/O
@@ -30,14 +35,17 @@ class ToolPermission(str, enum.Enum):
     WRITE_FILESYSTEM = "write_fs"
 
 
-class BaseTool(ABC):
+class BaseTool(ABC, Generic[TInput]):
     #: unique registry key
     name: ClassVar[str] = ""
     #: human/LLM-facing description
     description: ClassVar[str] = ""
     #: permissions this tool needs -- the registry can refuse to grant some
     permissions: ClassVar[tuple[ToolPermission, ...]] = (ToolPermission.PURE,)
-    #: Pydantic models describing the contract
+    #: Pydantic models describing the contract.  ``InputModel`` stays a
+    #: ``ClassVar`` (it must be readable off the class in :meth:`spec`), so
+    #: it is typed as ``type[BaseModel]`` here and re-narrowed to ``TInput``
+    #: at the one place it is instantiated (see :meth:`run`).
     InputModel: ClassVar[type[BaseModel]]
     OutputModel: ClassVar[type[BaseModel] | None] = None
 
@@ -64,7 +72,10 @@ class BaseTool(ABC):
             return call
 
         try:
-            output = await self._run(args)
+            # ``args`` is an instance of ``self.InputModel`` which, by the
+            # ``BaseTool[TInput]`` contract, is ``type[TInput]``.  A ``ClassVar``
+            # cannot carry the type variable, so bridge it here once.
+            output = await self._run(cast(TInput, args))
             if self.OutputModel is not None and not isinstance(output, self.OutputModel):
                 output = self.OutputModel(**output) if isinstance(output, dict) else output
             call.output = (
@@ -91,8 +102,11 @@ class BaseTool(ABC):
 
     # ------------------------------------------------------------------
     @abstractmethod
-    async def _run(self, args: BaseModel) -> Any:
-        """Perform the work.  Raise :class:`ToolExecutionError` on failure."""
+    async def _run(self, args: TInput) -> Any:
+        """Perform the work.  Raise :class:`ToolExecutionError` on failure.
+
+        ``args`` is an instance of this tool's own ``InputModel``.
+        """
         raise NotImplementedError
 
     @classmethod

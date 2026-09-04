@@ -25,7 +25,7 @@ class _Out(BaseModel):
     type: str
 
 
-class JsonParseTool(BaseTool):
+class JsonParseTool(BaseTool[_In]):
     name = "json_parse"
     description = "Parse a JSON string and optionally extract a value by dotted path."
     permissions: ClassVar = (ToolPermission.PURE,)

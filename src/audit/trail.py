@@ -6,11 +6,14 @@ callers can pass context dicts without hand-scrubbing every field.
 
 from __future__ import annotations
 
-from typing import Any, Callable
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from typing import Any
 
 from ..core.logging import get_logger
 from .events import AuditEvent, AuditEventType
+
+#: A durable sink receives every recorded event and returns nothing.
+AuditSink = Callable[[AuditEvent], None]
 
 _log = get_logger("audit")
 _SECRET_HINTS = ("key", "token", "secret", "password", "authorization", "api_key")
@@ -35,9 +38,9 @@ class AuditTrail:
     A durable sink (file / DB) can be added by passing ``on_event``.
     """
 
-    def __init__(self, on_event: callable | None = None) -> None:
+    def __init__(self, on_event: AuditSink | None = None) -> None:
         self._events: list[AuditEvent] = []
-        self._on_event = on_event
+        self._on_event: AuditSink | None = on_event
 
     def record(
         self,

@@ -105,9 +105,11 @@ class LLMAgent(Agent):
         if self.system_prompt:
             messages.append(Message(role=Role.SYSTEM, content=self.system_prompt))
 
-        usable_tools = [t for t in self.tools if registry and registry.has(t)]
+        usable_tools: list[str] = []
+        if registry is not None:
+            usable_tools = [t for t in self.tools if registry.has(t)]
         user_content = _render_task(task, context)
-        if usable_tools:
+        if usable_tools and registry is not None:
             specs = "\n".join(
                 f"- {registry.get(t).name}: {registry.get(t).description}"
                 for t in usable_tools

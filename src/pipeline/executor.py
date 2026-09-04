@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Mapping
 from typing import Any
 
 from ..agents.base_agent import Agent
@@ -34,14 +35,17 @@ class PipelineExecutor:
     def __init__(
         self,
         *,
-        agent_library: dict[str, Agent],
+        agent_library: Mapping[str, Agent],
         registry: ToolRegistry,
         router: ModelRouter,
         audit: AuditTrail,
         verifier: ResultVerifier,
         settings: Settings | None = None,
     ) -> None:
-        self._library = agent_library
+        # The executor only reads from the library, so a read-only
+        # ``Mapping`` (covariant in its value type) is the right contract:
+        # it accepts ``dict[str, LLMAgent]`` as well as ``dict[str, Agent]``.
+        self._library: Mapping[str, Agent] = agent_library
         self._registry = registry
         self._router = router
         self._audit = audit

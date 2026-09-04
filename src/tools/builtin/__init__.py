@@ -1,11 +1,18 @@
 """Built-in, safe-by-default tools."""
 
+from collections.abc import Callable
+from typing import Any
+
+from ..base_tool import BaseTool
 from .calculator import CalculatorTool, DeviationTool
 from .fs_reader import FileReadTool
 from .json_tool import JsonParseTool
 from .text_stats import TextStatsTool
 
-BUILTIN_TOOLS = [
+#: Zero-argument factories for the safe built-in tools.  Typed as callables
+#: (not ``type[BaseTool]``) so callers may instantiate them directly -- each
+#: entry is a concrete, non-abstract ``BaseTool`` subclass.
+BUILTIN_TOOLS: list[Callable[[], BaseTool[Any]]] = [
     CalculatorTool,
     DeviationTool,
     TextStatsTool,

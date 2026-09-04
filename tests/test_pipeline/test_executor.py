@@ -7,12 +7,12 @@ from src.core.config import Settings
 from src.core.exceptions import PipelineExecutionError
 from src.pipeline.executor import PipelineExecutor
 from src.pipeline.models import (
+    AgentResult,
     NodeStatus,
     NodeType,
     Pipeline,
     PipelineNode,
     RetryPolicy,
-    AgentResult
 )
 from src.pipeline.state import ExecutionContext
 from src.verification.verifier import ResultVerifier

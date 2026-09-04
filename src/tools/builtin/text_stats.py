@@ -25,7 +25,7 @@ class _Out(BaseModel):
     avg_word_length: float
 
 
-class TextStatsTool(BaseTool):
+class TextStatsTool(BaseTool[_In]):
     name = "text_stats"
     description = "Return character/word/sentence counts and vocabulary size for a piece of text."
     permissions: ClassVar = (ToolPermission.PURE,)

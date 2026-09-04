@@ -68,7 +68,9 @@ def build_agent_library(llm: BaseLLM) -> dict[str, LLMAgent]:
             tools=_DEFAULT_TOOLS.get(role, []),
             metadata={"kind": role},
         )
-    # aliases so planner output using node-type names still resolves
+    # aliases so planner output using node-type names still resolves.
+    # "custom" is always present (it is a key of _PROMPTS above).
+    generic_agent = library["custom"]
     for node_type in NodeType:
-        library.setdefault(node_type.value, library.get("custom"))
+        library.setdefault(node_type.value, generic_agent)
     return library
