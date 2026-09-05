@@ -71,6 +71,16 @@
         </div>
       </section>
 
+      <section class="card" id="liveCard" style="display:none;">
+        <h3>Live execution <span id="livePill" class="pill info">running</span></h3>
+        <p class="subtle" style="margin:0 0 12px;">
+          Streamed directly from the backend as each step happens -- classification, planning,
+          each pipeline node starting/finishing, every tool call (including sandboxed code
+          execution and cache reuse), and verification.
+        </p>
+        <div class="audit-list" id="liveList"></div>
+      </section>
+
       <section class="card" id="resultCard" style="display:none;">
         <h3>Result <span id="resultExecId" class="pill mute"></span></h3>
         <div id="resultBanners"></div>

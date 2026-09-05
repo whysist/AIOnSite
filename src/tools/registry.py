@@ -60,13 +60,28 @@ class ToolRegistry:
         return await self.get(name).run(**kwargs)
 
 
-def default_registry(*, allow_network: bool = False) -> ToolRegistry:
-    """Registry pre-loaded with the safe built-in tools."""
+def default_registry(
+    *, allow_network: bool = False, allow_sandbox: bool = False, allow_write_filesystem: bool = False,
+) -> ToolRegistry:
+    """Registry pre-loaded with the safe built-in tools.
+
+    ``allow_sandbox`` gates ``ToolPermission.SANDBOXED_EXEC`` and
+    ``allow_write_filesystem`` gates ``ToolPermission.WRITE_FILESYSTEM`` --
+    without them, ``SandboxedPythonTool`` / ``GenerateWordDocumentTool`` are
+    skipped at registration (their permission is not in ``allowed``), the
+    same way a network tool is skipped unless ``allow_network=True``. This
+    keeps arbitrary-code-execution and filesystem-write capability strictly
+    opt-in.
+    """
     from .builtin import BUILTIN_TOOLS
 
     allowed = {ToolPermission.PURE, ToolPermission.READ_FILESYSTEM}
     if allow_network:
         allowed.add(ToolPermission.NETWORK)
+    if allow_sandbox:
+        allowed.add(ToolPermission.SANDBOXED_EXEC)
+    if allow_write_filesystem:
+        allowed.add(ToolPermission.WRITE_FILESYSTEM)
     registry = ToolRegistry(allowed_permissions=allowed)
     for tool_cls in BUILTIN_TOOLS:
         try:

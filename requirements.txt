@@ -39,6 +39,11 @@ mypy>=1.11.0
 # Required for src/vision/document_processor.py to read any PDF at all.
 PyMuPDF>=1.24.0
 
+# .docx generation (src/tools/builtin/docx_writer.py, generate_word_document
+# tool). Off by default at the registry level (Settings.output_writing_enabled)
+# regardless of whether this is installed -- see ToolPermission.WRITE_FILESYSTEM.
+python-docx>=1.1.0
+
 # Real local vector search (src/retrieval/vector_store.py). Falls back to a
 # pickle-backed cosine-similarity scan if not installed -- fine at the small
 # scale of a single-inspection demo, but chromadb persists and scales better.

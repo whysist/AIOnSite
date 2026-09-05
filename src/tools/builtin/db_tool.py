@@ -23,7 +23,7 @@ from ...database.models import (
     get_maintenance_history,
     get_operating_limits,
 )
-from ..base_tool import BaseTool, ToolPermission
+from ..base_tool import BaseTool, ToolCategory, ToolPermission
 
 
 class _EquipmentIn(BaseModel):
@@ -49,6 +49,12 @@ class EquipmentLookupTool(BaseTool[_EquipmentIn]):
         "maintenance history from the local equipment database."
     )
     permissions: ClassVar[tuple[ToolPermission, ...]] = (ToolPermission.PURE,)
+    category: ClassVar[ToolCategory] = ToolCategory.RETRIEVAL
+    # Deterministic, side-effect-free local DB read: identical
+    # (equipment_id, query_type) always returns the same structured record
+    # within one execution, so re-running it for a second agent that
+    # already has the answer buys nothing but latency -- safe to cache.
+    cacheable: ClassVar[bool] = True
     InputModel = _EquipmentIn
     OutputModel = _EquipmentOut
 

@@ -114,6 +114,27 @@ class Settings(BaseSettings):
     # --- Sovereignty ---------------------------------------------------
     sovereign_mode: bool = False
 
+    # --- Sandboxed code execution (src/sandbox, tools/builtin/code_exec.py) --
+    # Off by default: arbitrary-code-execution is a categorically different
+    # risk than the fixed, audited tools, so a deployment must opt in.
+    sandbox_enabled: bool = False
+    # Attempt Docker-isolated execution when the ``docker`` binary is on
+    # PATH; falls back to subprocess isolation (weaker, but always
+    # available) when it isn't. See src/sandbox/executor.py for what each
+    # mode actually guarantees.
+    sandbox_use_docker: bool = False
+    sandbox_docker_image: str = "python:3.11-slim"
+    sandbox_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
+    sandbox_max_output_chars: int = Field(default=8000, gt=0)
+    sandbox_memory_limit_mb: int = Field(default=256, gt=0)
+    sandbox_cpu_limit: float = Field(default=1.0, gt=0)
+
+    # --- Output-writing tools (tools/builtin/docx_writer.py, etc.) ----------
+    # Off by default: ToolPermission.WRITE_FILESYSTEM is a categorically
+    # different risk than read-only tools, so a deployment must opt in --
+    # same pattern as sandbox_enabled for SANDBOXED_EXEC.
+    output_writing_enabled: bool = False
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

@@ -7,6 +7,7 @@ per request and threaded through the executor, agents and verifier.
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from typing import Any
@@ -18,6 +19,34 @@ from ..verification.schemas import VerificationResult
 from .models import AgentResult, ExecutionStatus, Pipeline, ToolResult
 from .requirements import TaskRequirement
 from .task_status import TaskStatus
+
+
+class ToolCallCache:
+    """Execution-scoped memo of successful, cacheable tool calls.
+
+    Deliberately *not* a Pydantic model and *not* part of ``ToolRegistry``:
+    it lives for exactly one execution (owned by that execution's
+    ``PipelineState``), so a cache hit can never leak between unrelated
+    requests, and it stays entirely inside the orchestration layer rather
+    than touching the tool-registry contract that other tool
+    implementations rely on. Eligibility is decided by the caller (only a
+    tool whose ``BaseTool.cacheable`` is ``True`` should ever be looked up
+    or stored here) -- this class only does the memoization itself.
+    """
+
+    def __init__(self) -> None:
+        self._entries: dict[str, ToolResult] = {}
+
+    @staticmethod
+    def _key(tool: str, arguments: dict[str, Any]) -> str:
+        return f"{tool}::{json.dumps(arguments, sort_keys=True, default=str)}"
+
+    def get(self, tool: str, arguments: dict[str, Any]) -> ToolResult | None:
+        return self._entries.get(self._key(tool, arguments))
+
+    def put(self, tool: str, arguments: dict[str, Any], result: ToolResult) -> None:
+        if result.ok:
+            self._entries[self._key(tool, arguments)] = result
 
 
 class PipelineState(BaseModel):
@@ -37,6 +66,9 @@ class PipelineState(BaseModel):
     verifications: dict[str, VerificationResult] = Field(default_factory=dict)
     errors: list[dict[str, Any]] = Field(default_factory=list)
     scratch: dict[str, Any] = Field(default_factory=dict)
+    tool_cache: ToolCallCache = Field(default_factory=ToolCallCache, exclude=True)
+
+    model_config = {"arbitrary_types_allowed": True}
 
     def record(self, node_id: str, result: AgentResult) -> None:
         self.node_results[node_id] = result

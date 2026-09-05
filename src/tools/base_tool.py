@@ -33,6 +33,33 @@ class ToolPermission(str, enum.Enum):
     READ_FILESYSTEM = "read_fs"
     NETWORK = "network"
     WRITE_FILESYSTEM = "write_fs"
+    # Arbitrary code execution, even when isolated (subprocess/container) --
+    # kept distinct from the other permissions because its risk profile is
+    # categorically different (untrusted, LLM-authored code, not a fixed,
+    # audited implementation), so a deployment must opt in explicitly (see
+    # ``default_registry(allow_sandbox=...)``) the same way network access
+    # already requires an explicit opt-in.
+    SANDBOXED_EXEC = "sandboxed_exec"
+
+
+class ToolCategory(str, enum.Enum):
+    """Coarse functional classification, orthogonal to :class:`ToolPermission`.
+
+    ``ToolPermission`` gates *what a tool is allowed to touch*;
+    ``ToolCategory`` describes *what kind of work it does*, so planning/
+    routing/caching logic can reason about a tool without hardcoding its
+    name. A tool with an unclassified category (``UNSPECIFIED``) is treated
+    conservatively everywhere a category matters (e.g. never auto-cached).
+    """
+
+    RETRIEVAL = "retrieval"
+    COMPUTATION = "computation"
+    TRANSFORMATION = "transformation"
+    DOCUMENT = "document"
+    ACTION = "action"
+    VERIFICATION = "verification"
+    PERCEPTION = "perception"
+    UNSPECIFIED = "unspecified"
 
 
 class BaseTool(ABC, Generic[TInput]):
@@ -42,6 +69,15 @@ class BaseTool(ABC, Generic[TInput]):
     description: ClassVar[str] = ""
     #: permissions this tool needs -- the registry can refuse to grant some
     permissions: ClassVar[tuple[ToolPermission, ...]] = (ToolPermission.PURE,)
+    #: functional classification -- see :class:`ToolCategory`.
+    category: ClassVar[ToolCategory] = ToolCategory.UNSPECIFIED
+    #: Whether identical calls (same tool + same normalised arguments) may
+    #: be served from an execution-scoped cache instead of re-running.
+    #: Defaults to ``False`` (never cache) so a new tool is only cached
+    #: after someone deliberately asserts it is safe to: pure/deterministic,
+    #: no side effects, and not sensitive to rapidly-changing external
+    #: state. See ``src/pipeline/state.py::ToolCallCache``.
+    cacheable: ClassVar[bool] = False
     #: Pydantic models describing the contract.  ``InputModel`` stays a
     #: ``ClassVar`` (it must be readable off the class in :meth:`spec`), so
     #: it is typed as ``type[BaseModel]`` here and re-narrowed to ``TInput``
@@ -123,6 +159,8 @@ class BaseTool(ABC, Generic[TInput]):
             "name": cls.name,
             "description": cls.description,
             "permissions": [p.value for p in cls.permissions],
+            "category": cls.category.value,
+            "cacheable": cls.cacheable,
             "input_schema": cls.InputModel.model_json_schema(),
             "output_schema": (
                 cls.OutputModel.model_json_schema() if cls.OutputModel else None

@@ -106,6 +106,11 @@ class ToolResult(BaseModel):
     # Set once this call's output has been recorded as first-class Evidence
     # (see ``src/state/evidence.py``) -- links the call back to that record.
     evidence_id: str | None = None
+    # True when this result was served from the execution-scoped tool-call
+    # cache (see ``src/pipeline/state.py::ToolCallCache``) instead of
+    # actually invoking the tool -- kept visible on the record itself so
+    # provenance/audit never has to guess whether a call really happened.
+    cached: bool = False
     duration_ms: float | None = None
     started_at: float = Field(default_factory=time.time)
 

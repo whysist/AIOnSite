@@ -21,6 +21,7 @@ from typing import Any
 
 import yaml
 
+from .agents.classifier import classify_task
 from .agents.planner import Planner
 from .agents.roles import build_agent_library
 from .agents.router import ModelRouter
@@ -52,18 +53,28 @@ class Orchestrator:
     ) -> None:
         self.settings = settings or get_settings()
         self.audit = audit or AuditTrail()
-        self.registry = registry or default_registry(allow_network=False)
+        self.registry = registry or default_registry(
+            allow_network=False,
+            allow_sandbox=self.settings.sandbox_enabled,
+            allow_write_filesystem=self.settings.output_writing_enabled,
+        )
         self._model_config = _load_model_config(self.settings.configs_dir)
         self._use_llm_verifier = use_llm_verifier
         self._routers: list[ModelRouter] = []
 
     # ------------------------------------------------------------------
-    async def run_task(self, task: str, *, confidential: bool = False) -> ExecutionContext:
-        ctx = ExecutionContext(
-            task=task,
-            sovereign_mode=self.settings.sovereign_mode,
-            confidential=confidential,
+    async def run_task(
+        self, task: str, *, confidential: bool = False, execution_id: str | None = None
+    ) -> ExecutionContext:
+        # ``execution_id`` lets a caller (the streaming API) know the id
+        # *before* the run starts, so it can register a live-event
+        # subscriber with no race against the first events being recorded.
+        ctx_kwargs: dict[str, Any] = dict(
+            task=task, sovereign_mode=self.settings.sovereign_mode, confidential=confidential,
         )
+        if execution_id:
+            ctx_kwargs["execution_id"] = execution_id
+        ctx = ExecutionContext(**ctx_kwargs)
         bind_execution(execution_id=ctx.execution_id)
         ctx.status = ExecutionStatus.RUNNING
         self.audit.record(
@@ -112,6 +123,18 @@ class Orchestrator:
     async def _run(
         self, ctx: ExecutionContext, router: ModelRouter, confidential: bool
     ) -> None:
+        classification = classify_task(ctx.task)
+        ctx.metadata["classification"] = classification.model_dump()
+        self.audit.record(
+            ctx.execution_id, AuditEventType.TASK_CLASSIFIED, component="classifier",
+            message=classification.reason,
+            metadata={
+                "complexity": classification.complexity.value,
+                "requires_planning": classification.requires_planning,
+                "equipment_id": classification.equipment_id,
+            },
+        )
+
         plan_node = PipelineNode(
             id="plan", name="plan", agent="planner",
             require_local=confidential or self.settings.sovereign_mode,
@@ -123,7 +146,17 @@ class Orchestrator:
             backoff_seconds=self.settings.plan_retry_backoff_seconds,
         )
 
-        plan = await planner.plan(ctx.task)
+        if not classification.requires_planning and classification.equipment_id:
+            # Classified with high confidence as a direct equipment-identity
+            # lookup: skip the planning LLM call entirely (that is the
+            # expensive, non-deterministic part) but still build and run the
+            # plan through the exact same build_pipeline / PipelineExecutor /
+            # ResultVerifier path as any other plan -- DAG validation,
+            # failure propagation, evidence tracking and verification are
+            # all unchanged for this route.
+            plan = Planner.lookup_plan(ctx.task, classification.equipment_id)
+        else:
+            plan = await planner.plan(ctx.task)
         ctx.plan = plan.model_dump()
         if plan.degraded:
             ctx.plan_degraded = True

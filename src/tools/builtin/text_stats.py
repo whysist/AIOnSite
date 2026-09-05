@@ -7,7 +7,7 @@ from typing import ClassVar
 
 from pydantic import BaseModel, Field
 
-from ..base_tool import BaseTool, ToolPermission
+from ..base_tool import BaseTool, ToolCategory, ToolPermission
 
 _WORD = re.compile(r"\b\w+\b")
 _SENT = re.compile(r"[.!?]+")
@@ -29,6 +29,7 @@ class TextStatsTool(BaseTool[_In]):
     name = "text_stats"
     description = "Return character/word/sentence counts and vocabulary size for a piece of text."
     permissions: ClassVar = (ToolPermission.PURE,)
+    category: ClassVar[ToolCategory] = ToolCategory.TRANSFORMATION
     InputModel = _In
     OutputModel = _Out
 

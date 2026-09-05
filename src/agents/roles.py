@@ -11,6 +11,16 @@ from ..llm.base import BaseLLM
 from ..pipeline.models import NodeType
 from .base_agent import LLMAgent
 
+_EVIDENCE_REUSE = (
+    "Before calling a retrieval tool, check the STRUCTURED EVIDENCE block (if "
+    "present) for what earlier steps already retrieved. If it already answers "
+    "what you need, use it directly -- do not call the same tool again for the "
+    "same equipment/document/query. Only retrieve again when the information "
+    "you need is genuinely absent from that evidence, is insufficient for the "
+    "question, or requires a different target (a different equipment id, a "
+    "different query type, a different document) than what is already there."
+)
+
 _RESEARCHER = (
     "You are a research agent in a local, sovereign inspection workbench. "
     "Given a task and any context, extract and organise the relevant facts. "
@@ -19,7 +29,7 @@ _RESEARCHER = (
     "or extract_structured_evidence for facts from ingested documents, and "
     "process_document if you need to read a specific document file directly. "
     "Be concrete. If information is missing, say so explicitly -- never invent "
-    "evidence, numbers, or citations."
+    "evidence, numbers, or citations. " + _EVIDENCE_REUSE
 )
 
 _ANALYST = (
@@ -27,19 +37,28 @@ _ANALYST = (
     "Perform comparisons and reasoning step by step. If a numeric calculation "
     "is needed and a tool is available, call the tool rather than doing mental "
     "arithmetic. If a specific fact (e.g. an operating limit) is missing from "
-    "context, look it up with equipment_lookup or extract_structured_evidence "
-    "rather than assuming a value. State assumptions explicitly."
+    "both the provided evidence and context, look it up with equipment_lookup "
+    "or extract_structured_evidence rather than assuming a value -- but check "
+    "the evidence already provided first. State assumptions explicitly. "
+    + _EVIDENCE_REUSE
 )
 
 _EXECUTOR = (
     "You are an execution agent. Carry out the concrete step you are given, "
-    "using tools when appropriate. Report exactly what was done and the result."
+    "using tools when appropriate. Report exactly what was done and the result. "
+    "If the step asks for a deliverable document (e.g. an approval note, a "
+    "findings summary) rather than just an answer in chat, use "
+    "generate_word_document to actually produce it -- do not describe what "
+    "the document would contain instead of generating it. " + _EVIDENCE_REUSE
 )
 
 _SUMMARIZER = (
     "You are a synthesis agent. Combine the prior step outputs into a single, "
     "well-structured final answer. Do not introduce claims that are not "
-    "supported by the context. Keep it concise and decision-ready."
+    "supported by the context. Keep it concise and decision-ready. If the "
+    "task asked for the result as a Word document (e.g. an approval note or "
+    "report), use generate_word_document with the finalised content -- do not "
+    "just describe the document in your text response instead of generating it."
 )
 
 _GENERIC = (
@@ -58,17 +77,19 @@ _PROMPTS: dict[str, str] = {
 _DEFAULT_TOOLS: dict[str, list[str]] = {
     "analyst": [
         "calculator", "calculate_deviation", "json_parse",
-        "equipment_lookup", "extract_structured_evidence",
+        "equipment_lookup", "extract_structured_evidence", "execute_python",
     ],
     "executor": [
         "calculator", "calculate_deviation", "json_parse", "read_file", "text_stats",
-        "equipment_lookup", "process_document", "search_knowledge_base",
+        "equipment_lookup", "process_document", "search_knowledge_base", "execute_python",
+        "generate_word_document",
     ],
     "researcher": [
         "read_file", "text_stats", "json_parse",
         "equipment_lookup", "process_document",
         "search_knowledge_base", "extract_structured_evidence",
     ],
+    "summarizer": ["generate_word_document"],
 }
 
 

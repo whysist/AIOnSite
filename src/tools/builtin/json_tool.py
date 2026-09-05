@@ -8,7 +8,7 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, Field
 
 from ...core.exceptions import ToolExecutionError
-from ..base_tool import BaseTool, ToolPermission
+from ..base_tool import BaseTool, ToolCategory, ToolPermission
 
 
 class _In(BaseModel):
@@ -29,6 +29,7 @@ class JsonParseTool(BaseTool[_In]):
     name = "json_parse"
     description = "Parse a JSON string and optionally extract a value by dotted path."
     permissions: ClassVar = (ToolPermission.PURE,)
+    category: ClassVar[ToolCategory] = ToolCategory.TRANSFORMATION
     InputModel = _In
     OutputModel = _Out
 

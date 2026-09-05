@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 class AuditEventType(str, enum.Enum):
     TASK_RECEIVED = "task_received"
+    TASK_CLASSIFIED = "task_classified"
     POLICY_ENFORCED = "policy_enforced"
     PLAN_CREATED = "plan_created"
     PLAN_FAILED = "plan_failed"
@@ -23,6 +24,7 @@ class AuditEventType(str, enum.Enum):
     NODE_FAILED = "node_failed"
     NODE_SKIPPED = "node_skipped"
     TOOL_CALLED = "tool_called"
+    TOOL_CACHE_HIT = "tool_cache_hit"
     TOOL_FAILED = "tool_failed"
     TOOL_REPAIR_ATTEMPTED = "tool_repair_attempted"
     TOOL_REPAIR_EXHAUSTED = "tool_repair_exhausted"

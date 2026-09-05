@@ -24,6 +24,8 @@ from ..core.logging import get_logger
 from ..llm.base import BaseLLM
 from ..llm.schemas import Message, Role
 from ..pipeline.models import AgentResult, ToolResult
+from ..pipeline.state import ToolCallCache
+from ..state.evidence import Evidence
 from ..tools.registry import ToolRegistry
 
 _log = get_logger("agents")
@@ -81,6 +83,8 @@ class Agent:
         *,
         context: dict[str, Any] | None = None,
         registry: ToolRegistry | None = None,
+        evidence: list[Evidence] | None = None,
+        tool_cache: ToolCallCache | None = None,
     ) -> AgentResult:
         raise NotImplementedError
 
@@ -95,12 +99,22 @@ class LLMAgent(Agent):
         "your final answer as plain text. Available tools:\n{tools}"
     )
 
+    #: Cap on how many upstream Evidence records are rendered into a
+    #: prompt, and how much of each one's content -- keeps evidence reuse
+    #: (Priority 2) from becoming unbounded context growth on a wide/deep
+    #: plan. Direct dependencies only (see ``PipelineExecutor._run_node``),
+    #: so this is already scoped before it ever reaches here.
+    _MAX_EVIDENCE_ITEMS = 12
+    _MAX_EVIDENCE_CHARS = 1500
+
     async def execute(
         self,
         task: str,
         *,
         context: dict[str, Any] | None = None,
         registry: ToolRegistry | None = None,
+        evidence: list[Evidence] | None = None,
+        tool_cache: ToolCallCache | None = None,
     ) -> AgentResult:
         if self.llm is None:
             raise AgentExecutionError(f"agent {self.name!r} has no LLM bound")
@@ -114,6 +128,9 @@ class LLMAgent(Agent):
         if registry is not None:
             usable_tools = [t for t in self.tools if registry.has(t)]
         user_content = _render_task(task, context)
+        user_content += _render_evidence(
+            evidence, max_items=self._MAX_EVIDENCE_ITEMS, max_chars=self._MAX_EVIDENCE_CHARS
+        )
         if usable_tools and registry is not None:
             specs = "\n".join(
                 _render_tool_schema(registry.get(t).spec()) for t in usable_tools
@@ -154,7 +171,24 @@ class LLMAgent(Agent):
                     Message(role=Role.USER, content=f"Tool {name!r} is not available. Answer directly.")
                 )
                 continue
-            result = await registry.call(name, **arguments)
+            cached_hit = None
+            if tool_cache is not None and registry.get(name).cacheable:
+                cached_hit = tool_cache.get(name, arguments)
+            if cached_hit is not None:
+                # Same tool + equivalent arguments already succeeded
+                # earlier in this execution (Priority 5: execution-scoped
+                # deduplication) -- reuse it rather than re-running a
+                # deterministic, side-effect-free retrieval. The original
+                # call's ``evidence_id`` is carried over so this reuse
+                # points at the *same* Evidence record rather than minting
+                # a duplicate one; ``cached=True`` keeps the reuse visible
+                # in the audit trail and on the record itself rather than
+                # silently masquerading as a fresh call.
+                result = cached_hit.model_copy(update={"input": arguments, "cached": True})
+            else:
+                result = await registry.call(name, **arguments)
+                if tool_cache is not None and result.ok and registry.get(name).cacheable:
+                    tool_cache.put(name, arguments, result)
             tool_results.append(result)
             messages.append(Message(role=Role.ASSISTANT, content=last.content))
 
@@ -258,6 +292,40 @@ def _render_tool_schema(spec: dict[str, Any]) -> str:
         suffix = f" -- {desc}" if desc else ""
         lines.append(f"    - {pname} ({ptype}, {marker}){suffix}")
     return "\n".join(lines)
+
+
+def _render_evidence(
+    evidence: list[Evidence] | None, *, max_items: int, max_chars: int
+) -> str:
+    """Render dependency-produced structured evidence as its own prompt block.
+
+    This is the direct fix for downstream agents only ever seeing an
+    upstream agent's free-text paraphrase (see ``PipelineExecutor._run_node``,
+    which now also passes ``ctx.state.evidence_for(node.depends_on)``):
+    the actual tool output is shown here, separately from -- and before --
+    the "CONTEXT FROM PREVIOUS STEPS" prose block ``_render_task`` builds,
+    so a model can answer from what was *actually retrieved* rather than
+    reconstructing (or re-fetching) it from another model's summary.
+    """
+    if not evidence:
+        return ""
+    shown = evidence[:max_items]
+    lines = [
+        "",
+        "",
+        "STRUCTURED EVIDENCE ALREADY RETRIEVED BY EARLIER STEPS "
+        "(use this directly; only call a retrieval tool again if the "
+        "information you need is genuinely not here, is insufficient, or "
+        "requires a different target/source):",
+    ]
+    for ev in shown:
+        content = ev.content if isinstance(ev.content, str) else json.dumps(ev.content, default=str)
+        if len(content) > max_chars:
+            content = content[:max_chars] + "...(truncated)"
+        lines.append(f"[evidence {ev.id} | source={ev.source} | step={ev.producer_node}]\n{content}")
+    if len(evidence) > max_items:
+        lines.append(f"...({len(evidence) - max_items} more evidence item(s) omitted)")
+    return "\n\n".join(lines)
 
 
 def _repair_feedback(name: str, result: ToolResult) -> str:

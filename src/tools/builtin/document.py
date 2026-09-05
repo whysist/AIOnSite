@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from ...core.exceptions import ToolExecutionError
 from ...vision.document_processor import process_document
 from ...vision.schemas import DocumentResult, PageResult, TableResult
-from ..base_tool import BaseTool, ToolPermission
+from ..base_tool import BaseTool, ToolCategory, ToolPermission
 
 
 class _ProcessDocIn(BaseModel):
@@ -43,6 +43,7 @@ class ProcessDocumentTool(BaseTool[_ProcessDocIn]):
     name = "process_document"
     description = "Parse a document (native text, OCR, tables) into pages with provenance."
     permissions: ClassVar[tuple[ToolPermission, ...]] = (ToolPermission.READ_FILESYSTEM,)
+    category: ClassVar[ToolCategory] = ToolCategory.DOCUMENT
     InputModel = _ProcessDocIn
     OutputModel = _ProcessDocOut
 

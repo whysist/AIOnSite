@@ -31,7 +31,7 @@ class FakeAgent(Agent):
     def with_llm(self, llm):
         return self
 
-    async def execute(self, task, *, context=None, registry=None):
+    async def execute(self, task, *, context=None, registry=None, evidence=None, tool_cache=None):
         self.calls += 1
         self.record.append((self.name, sorted((context or {}).keys())))
         if self.calls <= self.fail_times:
@@ -72,7 +72,7 @@ class ToolFailAgent(Agent):
     def with_llm(self, llm):
         return self
 
-    async def execute(self, task, *, context=None, registry=None):
+    async def execute(self, task, *, context=None, registry=None, evidence=None, tool_cache=None):
         tr = ToolResult(tool=self.tool_name, ok=False, error_kind="validation", error="bad args")
         return AgentResult(
             agent=self.name, ok=False, output="could not complete the calculation",
@@ -97,7 +97,7 @@ class ToolOkAgent(Agent):
     def with_llm(self, llm):
         return self
 
-    async def execute(self, task, *, context=None, registry=None):
+    async def execute(self, task, *, context=None, registry=None, evidence=None, tool_cache=None):
         tr = ToolResult(tool=self.tool_name, ok=True, output=self.output)
         return AgentResult(agent=self.name, ok=True, output="done", tool_results=[tr])
 
@@ -229,6 +229,40 @@ async def test_agent_result_ok_true_and_no_failures_is_satisfied():
     ctx = ExecutionContext(task="t")
     await ex.run(ctx, pipeline)
     assert pipeline.node("a").outcome is NodeOutcome.SATISFIED
+
+
+class EvidenceRecordingAgent(Agent):
+    """Records whatever ``evidence``/``tool_cache`` the executor passed in."""
+
+    def __init__(self, name):
+        super().__init__(name=name)
+        self.seen_evidence = None
+        self.seen_tool_cache = None
+
+    def with_llm(self, llm):
+        return self
+
+    async def execute(self, task, *, context=None, registry=None, evidence=None, tool_cache=None):
+        self.seen_evidence = evidence
+        self.seen_tool_cache = tool_cache
+        return AgentResult(agent=self.name, ok=True, output=f"{self.name}-ok")
+
+
+async def test_executor_passes_dependency_evidence_and_shared_cache_to_agents():
+    upstream = ToolOkAgent("r")
+    downstream = EvidenceRecordingAgent("d")
+    lib = {"r": upstream, "d": downstream}
+    pipeline = Pipeline(goal="g", nodes=[_node("r", "r"), _node("d", "d", ["r"])])
+    ex, _ = _executor(lib)
+    ctx = ExecutionContext(task="t")
+    await ex.run(ctx, pipeline)
+
+    assert downstream.seen_evidence is not None
+    assert len(downstream.seen_evidence) == 1
+    assert downstream.seen_evidence[0].producer_node == "r"
+    # Same ToolCallCache instance for the whole execution -- shared state,
+    # not a fresh cache per node.
+    assert downstream.seen_tool_cache is ctx.state.tool_cache
 
 
 async def test_successful_tool_call_is_recorded_as_evidence():

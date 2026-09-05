@@ -101,12 +101,88 @@ async def test_score_cannot_be_perfect_when_mandatory_work_failed():
 
 async def test_requirement_satisfied_when_producing_step_succeeded():
     reqs = [TaskRequirement(id="req_1", description="Compute the deviation", source_step_id="s1")]
+    ev = [Evidence(source="calculate_deviation", producer_tool="calculate_deviation", producer_node="s1")]
     res = await ResultVerifier(None).verify(
         "task", "The deviation is 20 bar.",
-        requirements=reqs, node_outcomes={"s1": "satisfied"},
+        requirements=reqs, node_outcomes={"s1": "satisfied"}, evidence=ev,
     )
     assert res.requirement_statuses["req_1"] == "satisfied"
     assert not any(m.requirement_id == "req_1" for m in res.missing_requirements)
+
+
+# ---------------------------------------------------------------------
+# Requirement -> step -> evidence traceability (primary verification path,
+# not text/keyword comparison). These are the audit's required regression
+# tests: a requirement linked to a responsible step must be verifiable
+# through execution outcome + structured evidence, independent of how the
+# final answer happens to be worded.
+
+
+async def test_requirement_traceability_passes_without_keyword_overlap():
+    """TEST 1: linked step succeeds and produced evidence -> satisfied, even
+    though the final answer shares no vocabulary with the requirement text."""
+    reqs = [
+        TaskRequirement(
+            id="req_1",
+            description="Retrieve the operating limits and inspection history of P-101.",
+            source_step_id="step_1", needs_evidence=True,
+        )
+    ]
+    ev = [Evidence(source="equipment_lookup", producer_tool="equipment_lookup", producer_node="step_1")]
+    res = await ResultVerifier(None).verify(
+        "task",
+        "P-101 is a centrifugal pump commissioned in 2019 and currently in service.",
+        requirements=reqs, node_outcomes={"step_1": "satisfied"}, evidence=ev,
+    )
+    assert res.requirement_statuses["req_1"] == "satisfied"
+    assert not any(m.requirement_id == "req_1" for m in res.missing_requirements)
+
+
+async def test_requirement_traceability_fails_when_responsible_step_fails():
+    """TEST 2: the responsible step failed -> the requirement is unsatisfied
+    (blocked) and the task must not be reported as completed, regardless of
+    what the final text says."""
+    reqs = [
+        TaskRequirement(id="req_1", description="Retrieve equipment limits", source_step_id="step_1")
+    ]
+    res = await ResultVerifier(None).verify(
+        "task", "Everything looks fine and within limits.",
+        requirements=reqs, node_outcomes={"step_1": "failed"},
+    )
+    assert res.requirement_statuses["req_1"] == "blocked"
+    assert res.passed is False
+    assert any(m.requirement_id == "req_1" for m in res.missing_requirements)
+
+
+async def test_requirement_traceability_rejects_success_with_no_evidence():
+    """TEST 3: the responsible step reports a successful outcome but
+    produced no recorded evidence -- must not be blindly accepted just
+    because the node ran without error."""
+    reqs = [
+        TaskRequirement(
+            id="req_1", description="Retrieve equipment limits",
+            source_step_id="step_1", needs_evidence=True,
+        )
+    ]
+    res = await ResultVerifier(None).verify(
+        "task", "The equipment limits were checked and are within range.",
+        requirements=reqs, node_outcomes={"step_1": "satisfied"}, evidence=[],
+    )
+    assert res.requirement_statuses["req_1"] != "satisfied"
+    assert res.passed is False
+    assert any(m.requirement_id == "req_1" for m in res.missing_requirements)
+
+
+async def test_requirement_with_no_step_link_uses_secondary_text_fallback_only():
+    """A requirement the planner left unlinked to any step still gets a
+    (weaker) chance via the secondary text-overlap check -- but this path
+    must never be exercised for a requirement that does have a step link."""
+    reqs = [TaskRequirement(id="req_1", description="Provide a final recommendation")]
+    res = await ResultVerifier(None).verify(
+        "task", "Final recommendation: continue normal operation.",
+        requirements=reqs,
+    )
+    assert res.requirement_statuses["req_1"] == "satisfied"
 
 
 async def test_missing_evidence_blocks_recommendation_even_with_clean_text():

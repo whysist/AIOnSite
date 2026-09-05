@@ -1,14 +1,29 @@
 """Result verifier.
 
-Two layers, cheap first:
+Layers, cheap and deterministic first:
 
 1. **Rule-based checks** (always run, no model): empty output, error markers,
-   truncation, unmet "must reference evidence" expectations, contradiction
-   keywords, malformed JSON when structured output was required.
-2. **Optional LLM critique** (when an :class:`BaseLLM` is supplied): asks the
+   truncation, contradiction keywords, malformed JSON when structured
+   output was required.
+2. **Requirement traceability -- the PRIMARY completeness mechanism**: for
+   each :class:`~src.pipeline.requirements.TaskRequirement` that carries
+   ``source_step_ids`` (set by the planner via ``agents.planner.RequirementSpec``
+   -- see :func:`src.pipeline.requirements.extract_requirements`), this
+   inspects the *actual* outcome of the responsible step(s) and, when the
+   requirement expects one, the presence of structured
+   :class:`~src.state.evidence.Evidence` those step(s) produced. This never
+   depends on comparing two independently-generated pieces of text.  Only a
+   requirement with *no* linked step falls back to
+   :func:`_requirement_mentioned`, a coarse keyword-overlap heuristic kept
+   as an explicitly secondary, best-effort check -- it can flag a gap, but
+   it can never be the reason a requirement is treated as satisfied when a
+   linked step's outcome says otherwise, because a linked requirement never
+   reaches it.
+3. **Optional LLM critique** (when an :class:`BaseLLM` is supplied): asks the
    model to judge correctness / completeness / consistency and return a
    structured verdict.  Failures here degrade gracefully to the rule-based
-   score rather than blowing up the run.
+   score rather than blowing up the run, and it can never override a
+   completeness gap found in step 2 back into a pass.
 
 The verifier never turns "no evidence" into a pass, and it never loops:
 callers enforce ``max_retries`` / ``max_replans``.
@@ -142,39 +157,32 @@ class ResultVerifier:
             )
 
         # Completeness: every *required* TaskRequirement must be traceable
-        # either to a plan step that actually completed successfully, or
-        # (for requirements with no single producing step) to a mention in
-        # the final text. This is what stops "the DAG finished" from being
-        # reported as "the task was done" -- see TaskStatus in
+        # either to the step(s) responsible for it (checked against their
+        # actual outcome and the structured evidence they produced -- the
+        # PRIMARY mechanism), or -- only when the planner attached no
+        # step(s) at all -- to a mention in the final text (a SECONDARY,
+        # best-effort fallback). This is what stops "the DAG finished" from
+        # being reported as "the task was done" -- see TaskStatus in
         # ``src/pipeline/task_status.py`` for how this feeds the final gate.
         for req in requirements:
-            outcome = (node_outcomes or {}).get(req.source_step_id or "")
-            if outcome == "satisfied":
-                status = "satisfied"
-            elif outcome in ("blocked", "failed", "skipped"):
-                # "skipped" means the producing step never ran at all
-                # (an upstream dependency failed) -- that is exactly as
-                # unsatisfied as the step failing outright, and must not
-                # fall through to the weak keyword-overlap heuristic below,
-                # which could otherwise mark it "satisfied" purely because
-                # the final text happens to share a few words with it.
-                status = "blocked"
-            elif outcome == "degraded":
-                status = "unsatisfied"
+            if req.source_step_ids:
+                status, reason = _evaluate_requirement_from_execution(
+                    req, node_outcomes or {}, evidence,
+                )
             elif _requirement_mentioned(req.description, text):
-                status = "satisfied"
+                status, reason = "satisfied", None
             else:
-                status = "unsatisfied"
+                status, reason = (
+                    "unsatisfied",
+                    "no responsible step was linked and the final text does not "
+                    "plausibly address this requirement",
+                )
             requirement_statuses[req.id] = status
             if req.required and status != "satisfied":
-                reason = (
-                    f"the step meant to satisfy this did not complete successfully "
-                    f"(outcome={outcome!r})" if outcome
-                    else "no supporting evidence or completed step found"
-                )
                 missing_requirements.append(
                     MissingRequirement(
-                        requirement_id=req.id, description=req.description, reason=reason,
+                        requirement_id=req.id, description=req.description,
+                        reason=reason or "no supporting evidence or completed step found",
                     )
                 )
 
@@ -245,6 +253,58 @@ class ResultVerifier:
 def _looks_evidenced(text: str) -> bool:
     markers = ("source:", "page", "[", "http://", "https://", "citation", "evidence")
     return any(m in text.lower() for m in markers)
+
+
+def _evaluate_requirement_from_execution(
+    req: TaskRequirement,
+    node_outcomes: dict[str, str],
+    evidence: list[Evidence],
+) -> tuple[str, str | None]:
+    """Primary requirement check: step outcome + (when expected) evidence.
+
+    This is deliberately independent of the final answer's wording -- see
+    the P-101 incident this replaces, where a correct answer failed
+    verification only because the planner's requirement text and the
+    summarizer's paraphrase of the same fact didn't share enough
+    vocabulary. Returns ``(status, reason)`` where ``status`` is one of
+    "satisfied" / "unsatisfied" / "blocked" (mirroring
+    ``RequirementStatus`` values) and ``reason`` is ``None`` only when
+    satisfied.
+    """
+    step_ids = req.source_step_ids
+    outcomes = {sid: node_outcomes.get(sid) for sid in step_ids}
+
+    blocked = [sid for sid, o in outcomes.items() if o in ("blocked", "failed", "skipped")]
+    if blocked:
+        # "skipped" means the producing step never ran at all (an upstream
+        # dependency failed) -- exactly as unsatisfied as the step failing
+        # outright, and must never be treated as satisfied merely because
+        # the final text happens to share a few words with it.
+        return "blocked", (
+            f"responsible step(s) {blocked} did not complete successfully "
+            f"(outcome={[outcomes[s] for s in blocked]!r})"
+        )
+
+    not_run = [sid for sid, o in outcomes.items() if o is None]
+    if not_run:
+        return "unsatisfied", f"responsible step(s) {not_run} reported no outcome"
+
+    degraded = [sid for sid, o in outcomes.items() if o == "degraded"]
+    if degraded:
+        return "unsatisfied", (
+            f"responsible step(s) {degraded} completed with a degraded outcome "
+            "(an optional tool failed)"
+        )
+
+    # Every linked step outcome is "satisfied" at this point.
+    if req.needs_evidence:
+        produced = [e for e in evidence if e.producer_node in step_ids]
+        if not produced:
+            return "unsatisfied", (
+                f"responsible step(s) {step_ids} completed but produced no "
+                "recorded evidence for this requirement"
+            )
+    return "satisfied", None
 
 
 def _requirement_mentioned(description: str, text: str) -> bool:

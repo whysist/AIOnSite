@@ -187,6 +187,64 @@ def test_planner_system_prompt_tells_the_model_about_criticality():
     assert "optional" in _SYSTEM and "critical" in _SYSTEM
 
 
+# ---------------------------------------------------------------------
+# Requirement -> step traceability (Plan.requirements now carries the
+# step id(s) responsible for satisfying each requirement).
+
+
+def test_requirement_accepts_plain_string_for_backward_compatibility():
+    plan = Plan(goal="g", steps=[PlanStep(id="s1", description="x")], requirements=["do a thing"])
+    assert plan.requirements[0].description == "do a thing"
+    assert plan.requirements[0].step_ids == []
+    assert plan.requirements[0].needs_evidence is True
+
+
+def test_requirement_object_form_links_to_a_step():
+    plan = Plan(
+        goal="g",
+        steps=[PlanStep(id="s1", description="gather"), PlanStep(id="s2", description="summarise", depends_on=["s1"])],
+        requirements=[{"description": "gather the facts", "step_ids": ["s1"], "needs_evidence": True}],
+    )
+    assert plan.requirements[0].step_ids == ["s1"]
+
+
+def test_plan_rejects_requirement_referencing_unknown_step():
+    import pytest as _pytest
+
+    with _pytest.raises(Exception):
+        Plan(
+            goal="g",
+            steps=[PlanStep(id="s1", description="gather")],
+            requirements=[{"description": "x", "step_ids": ["does_not_exist"]}],
+        )
+
+
+def test_extract_requirements_links_source_step_ids_from_explicit_requirements():
+    from src.pipeline.requirements import extract_requirements
+
+    plan = Plan(
+        goal="g",
+        steps=[PlanStep(id="s1", description="gather"), PlanStep(id="s2", description="summarise", depends_on=["s1"])],
+        requirements=[
+            {"description": "Retrieve the SOP", "step_ids": ["s1"], "needs_evidence": True},
+            {"description": "Provide a recommendation", "step_ids": ["s2"], "needs_evidence": False},
+        ],
+    )
+    reqs = extract_requirements(plan)
+    assert reqs[0].source_step_ids == ["s1"]
+    assert reqs[0].needs_evidence is True
+    assert reqs[1].source_step_ids == ["s2"]
+    assert reqs[1].needs_evidence is False
+
+
+def test_lookup_plan_is_deterministic_and_links_requirement_to_researcher():
+    plan = Planner.lookup_plan("Tell me about P-101.", "P-101")
+    assert plan.degraded is False
+    assert [s.agent for s in plan.steps] == ["researcher", "summarizer"]
+    assert plan.requirements[0].step_ids == ["step_1"]
+    assert plan.requirements[0].needs_evidence is True
+
+
 def test_plan_accepts_step_count_outside_2_to_6_without_raising():
     # The prompt states "2-6 steps" as a target, not a hard contract -- a
     # model that ignores it must not be rejected (that only burns a retry

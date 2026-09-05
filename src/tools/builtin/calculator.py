@@ -17,7 +17,7 @@ from typing import ClassVar
 from pydantic import BaseModel, Field
 
 from ...core.exceptions import ToolExecutionError
-from ..base_tool import BaseTool, ToolPermission
+from ..base_tool import BaseTool, ToolCategory, ToolPermission
 
 # Restricted operator tables.  Values are plain numeric callables; the
 # explicit types let mypy see each lookup result as callable.
@@ -66,6 +66,7 @@ class CalculatorTool(BaseTool[_CalcIn]):
     name = "calculator"
     description = "Evaluate a basic arithmetic expression (+ - * / // % **). No variables or functions."
     permissions: ClassVar = (ToolPermission.PURE,)
+    category: ClassVar[ToolCategory] = ToolCategory.COMPUTATION
     InputModel = _CalcIn
     OutputModel = _CalcOut
 
@@ -104,6 +105,7 @@ class DeviationTool(BaseTool[_DevIn]):
         "approved limit. Deterministic; returns inputs, formula and output."
     )
     permissions: ClassVar = (ToolPermission.PURE,)
+    category: ClassVar[ToolCategory] = ToolCategory.COMPUTATION
     InputModel = _DevIn
     OutputModel = _DevOut
 

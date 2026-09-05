@@ -136,6 +136,8 @@ class PipelineExecutor:
                         f"{node.description}\n\n(Overall goal: {pipeline.goal})",
                         context=context,
                         registry=self._registry,
+                        evidence=ctx.state.evidence_for(node.depends_on),
+                        tool_cache=ctx.state.tool_cache,
                     ),
                     timeout=node.timeout_seconds or self._settings.node_timeout_seconds,
                 )
@@ -145,6 +147,22 @@ class PipelineExecutor:
                 ctx.state.record(node.id, result)
 
                 for tr in result.tool_results:
+                    if tr.cached:
+                        # Served from the execution-scoped tool-call cache
+                        # (see LLMAgent.execute / ToolCallCache) instead of
+                        # actually invoking the tool -- recorded distinctly
+                        # so the audit trail never implies a call happened
+                        # that didn't, and no duplicate Evidence is minted
+                        # for data this execution already has.
+                        self._audit.record(
+                            ctx.execution_id, AuditEventType.TOOL_CACHE_HIT,
+                            component="tool", status="ok", message=tr.tool,
+                            metadata={
+                                "node": node.id, "input": tr.input,
+                                "evidence_id": tr.evidence_id,
+                            },
+                        )
+                        continue
                     self._audit.record(
                         ctx.execution_id,
                         AuditEventType.TOOL_CALLED if tr.ok else AuditEventType.TOOL_FAILED,

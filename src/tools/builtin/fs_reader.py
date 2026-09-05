@@ -13,7 +13,7 @@ from typing import ClassVar
 from pydantic import BaseModel, Field
 
 from ...core.exceptions import ToolExecutionError
-from ..base_tool import BaseTool, ToolPermission
+from ..base_tool import BaseTool, ToolCategory, ToolPermission
 
 _MAX_BYTES = 1_000_000
 
@@ -34,6 +34,7 @@ class FileReadTool(BaseTool[_In]):
     name = "read_file"
     description = "Read a UTF-8 text file located under the project data directory."
     permissions: ClassVar = (ToolPermission.READ_FILESYSTEM,)
+    category: ClassVar[ToolCategory] = ToolCategory.DOCUMENT
     InputModel = _In
     OutputModel = _Out
 

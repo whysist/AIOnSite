@@ -4,11 +4,15 @@
  * AIOnSite frontend -- a plain static page (no build step, no framework)
  * that talks directly to the real FastAPI backend (src/api/app.py).
  *
- * Every value rendered here comes from an actual API response. There is no
- * simulated progress or fabricated data: POST /tasks is synchronous on the
- * backend today, so this page shows an honest "running..." state with an
- * elapsed timer while it waits, then renders the real result -- it does not
- * pretend to know per-node status while the request is in flight.
+ * Every value rendered here comes from an actual API response. Running a
+ * task uses the streaming flow: POST /tasks/stream starts it in the
+ * background and returns immediately, then this page opens a live
+ * EventSource against GET /tasks/{id}/events and renders each real
+ * pipeline step (classification, plan, node starts/completions, tool
+ * calls, cache reuse, verification) as the backend actually records it --
+ * nothing here is simulated or pre-scripted. Once the stream's terminal
+ * "stream_end" event arrives, the full detailed view (pipeline, audit,
+ * verification) is loaded the same way a past run is loaded.
  */
 
 const LS_API_BASE = "aionsite.apiBase";
@@ -28,6 +32,9 @@ const els = {
   taskInput: document.getElementById("taskInput"),
   confidentialInput: document.getElementById("confidentialInput"),
   runBtn: document.getElementById("runBtn"),
+  liveCard: document.getElementById("liveCard"),
+  livePill: document.getElementById("livePill"),
+  liveList: document.getElementById("liveList"),
   resultCard: document.getElementById("resultCard"),
   resultExecId: document.getElementById("resultExecId"),
   resultBanners: document.getElementById("resultBanners"),
@@ -223,18 +230,62 @@ async function refreshHistoryList() {
 // running a task
 // ---------------------------------------------------------------------
 
-function setRunning(isRunning) {
+let activeEventSource = null;
+let liveStepCount = 0;
+
+function setRunning(isRunning, lastStepLabel) {
   els.runBtn.disabled = isRunning;
   if (isRunning) {
-    const started = Date.now();
-    els.runBtn.innerHTML = '<span class="spinner"></span> Running... 0s';
-    runTimer = setInterval(() => {
-      els.runBtn.innerHTML =
-        `<span class="spinner"></span> Running... ${Math.round((Date.now() - started) / 1000)}s`;
-    }, 500);
+    if (!runTimer) {
+      const started = Date.now();
+      runTimer = setInterval(() => {
+        const secs = Math.round((Date.now() - started) / 1000);
+        const label = els.runBtn.dataset.lastStep || "starting...";
+        els.runBtn.innerHTML = `<span class="spinner"></span> ${esc(label)} (${secs}s)`;
+      }, 500);
+    }
+    if (lastStepLabel) els.runBtn.dataset.lastStep = lastStepLabel;
   } else {
     clearInterval(runTimer);
+    runTimer = null;
+    delete els.runBtn.dataset.lastStep;
     els.runBtn.textContent = "Run task";
+  }
+}
+
+// ---------------------------------------------------------------------
+// live step rendering -- one line per real backend event, as it happens
+// ---------------------------------------------------------------------
+
+function resetLivePanel() {
+  liveStepCount = 0;
+  els.liveCard.style.display = "";
+  els.livePill.className = "pill info";
+  els.livePill.textContent = "running";
+  els.liveList.innerHTML = "";
+}
+
+function appendLiveEvent(ev) {
+  liveStepCount += 1;
+  const row = document.createElement("div");
+  row.className = "audit-item";
+  const time = ev.timestamp ? fmtTime(ev.timestamp) : "";
+  row.innerHTML = `
+    <span class="audit-time">${esc(time)}</span>
+    <span class="pill ${statusPillClass(ev.status)}">${esc(ev.status || "ok")}</span>
+    <span>
+      <span class="audit-event">${esc(ev.event_type)}</span>
+      <span class="audit-meta">${ev.component ? " &middot; " + esc(ev.component) : ""}${ev.message ? " &mdash; " + esc(ev.message) : ""}</span>
+    </span>`;
+  els.liveList.appendChild(row);
+  els.liveList.scrollTop = els.liveList.scrollHeight;
+  setRunning(true, `${ev.event_type}${ev.message ? ": " + ev.message : ""}`.slice(0, 60));
+}
+
+function closeActiveStream() {
+  if (activeEventSource) {
+    activeEventSource.close();
+    activeEventSource = null;
   }
 }
 
@@ -245,20 +296,66 @@ async function runTask() {
     return;
   }
   clearError();
-  setRunning(true);
+  closeActiveStream();
+  setRunning(true, "starting...");
+  resetLivePanel();
+  els.resultCard.style.display = "none";
+  els.pipelineCard.style.display = "none";
+  els.auditCard.style.display = "none";
+
+  let created;
   try {
-    const created = await api("/tasks", {
+    created = await api("/tasks/stream", {
       method: "POST",
       body: JSON.stringify({ task, confidential: els.confidentialInput.checked }),
     });
-    rememberRun(created.execution_id, task);
-    await loadExecution(created.execution_id);
-    await refreshHistoryList();
   } catch (err) {
     showError(`Task run failed: ${err.message}`);
-  } finally {
     setRunning(false);
+    return;
   }
+
+  rememberRun(created.execution_id, task);
+  activeExecId = created.execution_id;
+  await refreshHistoryList();
+
+  const streamUrl = `${apiBase()}/tasks/${encodeURIComponent(created.execution_id)}/events`;
+  const es = new EventSource(streamUrl);
+  activeEventSource = es;
+
+  es.onmessage = async (msg) => {
+    let payload;
+    try {
+      payload = JSON.parse(msg.data);
+    } catch {
+      return;
+    }
+    if (payload.event_type === "stream_end") {
+      closeActiveStream();
+      els.livePill.className = `pill ${statusPillClass(payload.status)}`;
+      els.livePill.textContent = payload.status || "done";
+      setRunning(false);
+      try {
+        await loadExecution(created.execution_id);
+      } catch (err) {
+        showError(`Run finished but could not load the full result: ${err.message}`);
+      }
+      await refreshHistoryList();
+      return;
+    }
+    appendLiveEvent(payload);
+  };
+
+  es.onerror = () => {
+    // The browser's EventSource retries transient drops on its own; if the
+    // backend process itself is gone, further retries will just keep
+    // failing silently in the background, which is preferable to leaving
+    // the "running" button spinner up forever without any error shown.
+    if (es.readyState === EventSource.CLOSED) {
+      setRunning(false);
+      showError("Live event stream closed unexpectedly -- is the backend still running?");
+    }
+  };
 }
 
 // ---------------------------------------------------------------------
@@ -316,6 +413,23 @@ function renderResult(ex) {
 
   els.finalAnswer.textContent = ex.final_answer || "(no final answer was produced)";
 
+  document.getElementById("generatedDocs")?.remove();
+  const generated = collectGeneratedDocuments(ex.node_results);
+  if (generated.length) {
+    els.finalAnswer.insertAdjacentHTML(
+      "afterend",
+      `<div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px;" id="generatedDocs">` +
+        generated
+          .map(
+            (d) => `<a class="btn" href="${esc(d.url)}" target="_blank" rel="noopener">
+              &#128196; Download ${esc(d.filename)}
+            </a>`
+          )
+          .join("") +
+        `</div>`
+    );
+  }
+
   const v = ex.final_verification;
   if (v) {
     const issues = (v.issues || [])
@@ -355,6 +469,31 @@ function renderPipeline(p) {
   });
 }
 
+function collectGeneratedDocuments(nodeResults) {
+  const docs = [];
+  for (const result of Object.values(nodeResults || {})) {
+    for (const t of result?.tool_results || []) {
+      if (t.tool === "generate_word_document" && t.ok && t.output?.filename) {
+        docs.push({
+          filename: t.output.filename,
+          url: `${apiBase()}/files/${encodeURIComponent(t.output.filename)}`,
+        });
+      }
+    }
+  }
+  return docs;
+}
+
+function downloadLinkForToolResult(t) {
+  if (t.tool !== "generate_word_document" || !t.ok || !t.output?.filename) return "";
+  const url = `${apiBase()}/files/${encodeURIComponent(t.output.filename)}`;
+  return `<div class="row" style="margin-top:6px;">
+    <a class="btn secondary" href="${esc(url)}" target="_blank" rel="noopener" style="padding:6px 12px;font-size:12px;">
+      &#128196; Download ${esc(t.output.filename)}
+    </a>
+  </div>`;
+}
+
 function renderNode(n) {
   const result = n.result;
   const toolResults = result?.tool_results || [];
@@ -365,10 +504,12 @@ function renderNode(n) {
           <span class="tool-name">${esc(t.tool)}</span>
           <span class="pill ${t.ok ? "ok" : "bad"}">${t.ok ? "ok" : "failed"}</span>
           ${t.error_kind ? `<span class="pill mute">${esc(t.error_kind)}</span>` : ""}
+          ${t.cached ? '<span class="pill info">cached</span>' : ""}
           <span class="subtle" style="margin:0;">${fmtMs(t.duration_ms)}</span>
         </div>
         ${t.error ? `<div style="color:#a3372f;">${esc(t.error)}</div>` : ""}
         <pre>${esc(JSON.stringify({ input: t.input, output: t.output }, null, 2))}</pre>
+        ${downloadLinkForToolResult(t)}
       </div>`
     )
     .join("");

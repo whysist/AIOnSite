@@ -44,3 +44,21 @@ def test_unknown_execution_returns_404(client):
 
 def test_task_validation_error(client):
     assert client.post("/tasks", json={"task": ""}).status_code == 422
+
+
+def test_generated_files_are_served_read_only_at_files_mount(client):
+    """Whatever an output-writing tool writes into DEFAULT_OUTPUT_ROOT must
+    actually be retrievable -- proves the /files static mount and the
+    tool's write location are wired to the same directory, not just
+    independently "probably" pointing at the same path."""
+    from src.tools.builtin.docx_writer import DEFAULT_OUTPUT_ROOT
+
+    DEFAULT_OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+    marker = DEFAULT_OUTPUT_ROOT / "test_marker_file.docx"
+    marker.write_bytes(b"not a real docx, just proving the mount works")
+    try:
+        resp = client.get("/files/test_marker_file.docx")
+        assert resp.status_code == 200
+        assert resp.content == b"not a real docx, just proving the mount works"
+    finally:
+        marker.unlink(missing_ok=True)

@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from ...retrieval.schemas import Evidence, Fact
 from ...retrieval.service import KnowledgeBase
-from ..base_tool import BaseTool, ToolPermission
+from ..base_tool import BaseTool, ToolCategory, ToolPermission
 
 _default_kb: KnowledgeBase | None = None
 
@@ -49,6 +49,11 @@ class KnowledgeBaseSearchTool(BaseTool[_SearchIn]):
         "source, page, score, document_id."
     )
     permissions: ClassVar[tuple[ToolPermission, ...]] = (ToolPermission.PURE,)
+    category: ClassVar[ToolCategory] = ToolCategory.RETRIEVAL
+    # Read-only search over an already-ingested, execution-local knowledge
+    # base: identical (query, equipment_id, k) yields the same ranked
+    # evidence within one execution, so it is safe to reuse.
+    cacheable: ClassVar[bool] = True
     InputModel = _SearchIn
     OutputModel = _SearchOut
 
@@ -85,6 +90,8 @@ class ExtractStructuredEvidenceTool(BaseTool[_FactIn]):
         "-- replaces fragile number scraping."
     )
     permissions: ClassVar[tuple[ToolPermission, ...]] = (ToolPermission.PURE,)
+    category: ClassVar[ToolCategory] = ToolCategory.RETRIEVAL
+    cacheable: ClassVar[bool] = True
     InputModel = _FactIn
     OutputModel = _FactOut
 
