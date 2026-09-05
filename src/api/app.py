@@ -11,6 +11,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from ..audit.trail import AuditTrail
@@ -57,6 +58,19 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AIOnSite", version="0.2.0", lifespan=lifespan)
+
+# The frontend (frontend/index.html) is a plain static file opened directly
+# from disk or served by an unrelated dev server, so its origin never
+# matches this API's -- without CORS every fetch() call would be silently
+# blocked by the browser. Wide open ("*") is fine here: this is a local,
+# read-mostly demo API with no cookies/auth to leak; tighten this before any
+# non-local deployment.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def _state() -> _AppState:
@@ -134,6 +148,7 @@ async def get_task(execution_id: str) -> ExecutionResponse:
         ),
         error=ctx.error,
         node_results={k: v.model_dump() for k, v in ctx.state.node_results.items()},
+        replans=ctx.replans,
     )
 
 

@@ -39,6 +39,19 @@ _log = get_logger("verification")
 _ERROR_MARKERS = ("traceback (most recent call last)", "exception:", "error:")
 _CONTRADICTION_MARKERS = ("however, this contradicts", "conflicting", "cannot be both")
 
+# Tools whose output carries real provenance (a document+page or a DB
+# table/record) -- if one of these was actually called, the final text is
+# expected to cite it (see the citation instruction added to every role
+# prompt in src/agents/roles.py). A calculator/text-stats call doesn't
+# carry provenance, so it's not in this set.
+_CITATION_TOOLS = {
+    "search_knowledge_base", "extract_structured_evidence",
+    "equipment_lookup", "process_document",
+}
+_CITATION_PATTERN = re.compile(
+    r"\[source\s*:|\bsource\s*[:#]|\bpage\s+\d+\b|record\s*#|\.pdf\b", re.IGNORECASE
+)
+
 _CRITIQUE_SYSTEM = (
     "You are a strict verification agent. Given a TASK and a RESULT, judge the "
     "result for correctness, completeness, consistency and unsupported claims. "
@@ -125,6 +138,20 @@ class ResultVerifier:
                     code="missing_evidence",
                     message="No citation/evidence reference found although evidence was required.",
                     severity=Severity.MAJOR,
+                )
+            )
+
+        evidence_tools_used = {e.producer_tool for e in evidence if e.producer_tool} & _CITATION_TOOLS
+        if evidence_tools_used and text and not _CITATION_PATTERN.search(text):
+            issues.append(
+                VerificationIssue(
+                    code="missing_citation",
+                    message=(
+                        "Evidence-bearing tool(s) "
+                        f"{', '.join(sorted(evidence_tools_used))} were used but the result "
+                        "contains no [source: ...] citation."
+                    ),
+                    severity=Severity.MINOR,
                 )
             )
 

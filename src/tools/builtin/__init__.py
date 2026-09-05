@@ -5,8 +5,11 @@ from typing import Any
 
 from ..base_tool import BaseTool
 from .calculator import CalculatorTool, DeviationTool
+from .db_tool import EquipmentLookupTool
+from .document import ProcessDocumentTool
 from .fs_reader import FileReadTool
 from .json_tool import JsonParseTool
+from .kb import ExtractStructuredEvidenceTool, KnowledgeBaseSearchTool
 from .text_stats import TextStatsTool
 
 #: Zero-argument factories for the safe built-in tools.  Typed as callables
@@ -18,6 +21,10 @@ BUILTIN_TOOLS: list[Callable[[], BaseTool[Any]]] = [
     TextStatsTool,
     JsonParseTool,
     FileReadTool,
+    EquipmentLookupTool,
+    ProcessDocumentTool,
+    KnowledgeBaseSearchTool,
+    ExtractStructuredEvidenceTool,
 ]
 
 __all__ = [
@@ -27,4 +34,8 @@ __all__ = [
     "TextStatsTool",
     "JsonParseTool",
     "FileReadTool",
+    "EquipmentLookupTool",
+    "ProcessDocumentTool",
+    "KnowledgeBaseSearchTool",
+    "ExtractStructuredEvidenceTool",
 ]

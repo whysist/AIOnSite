@@ -43,6 +43,9 @@ class ExecutionResponse(BaseModel):
     final_verification: dict[str, Any] | None = None
     error: str | None = None
     node_results: dict[str, Any] = Field(default_factory=dict)
+    # How many times the orchestrator re-planned after a verifier REPLAN
+    # verdict (bounded by MAX_REPLANS). 0 means it succeeded first try.
+    replans: int = 0
 
 
 class PipelineResponse(BaseModel):

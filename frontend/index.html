@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AIOnSite &mdash; Sovereign Agentic Workbench</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <!-- ============================== Sidebar ============================== -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="mark">AI</div>
+        <div>
+          <h1>AIOnSite</h1>
+          <p>Sovereign Agentic Workbench</p>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="apiBase">API base URL</label>
+        <input type="text" id="apiBase" value="http://localhost:8000" />
+      </div>
+
+      <div id="statusCard" class="status-card">
+        <strong><span class="dot pending" id="healthDot"></span>Checking backend&hellip;</strong>
+        <div class="status-row"><span>Environment</span><span id="stEnv">&mdash;</span></div>
+        <div class="status-row"><span>LLM provider</span><span id="stProvider">&mdash;</span></div>
+        <div class="status-row"><span>Sovereign mode</span><span id="stSovereign">&mdash;</span></div>
+        <div class="status-row"><span>Tools registered</span><span id="stTools">&mdash;</span></div>
+      </div>
+
+      <div class="row">
+        <button class="btn secondary" id="refreshBtn" style="flex:1">Refresh</button>
+      </div>
+
+      <div class="history-label">Run history</div>
+      <div class="history-list" id="historyList">
+        <div class="history-empty">No runs yet this session.</div>
+      </div>
+
+      <div class="sidebar-footer">
+        Talks directly to the FastAPI backend&nbsp;&mdash;&nbsp;no server of its own.
+        <br />Start it with <code>python -m src.main --serve</code>.
+      </div>
+    </aside>
+
+    <!-- =============================== Main ================================ -->
+    <main class="panel">
+      <h2>Run an inspection task</h2>
+      <p class="subtle">
+        Submitted to the real orchestrator &mdash; planner &rarr; pipeline DAG &rarr; agents &amp; tools &rarr; verifier &rarr; audit trail.
+      </p>
+
+      <div id="globalError"></div>
+
+      <section class="card">
+        <h3>New task</h3>
+        <div class="field" style="margin-bottom:12px;">
+          <label for="taskInput">Task</label>
+          <textarea id="taskInput" rows="4" placeholder="Analyze V-101: observed pressure 120 bar vs approved limit 100 bar. Calculate the deviation, review maintenance history, retrieve the SOP, and give a final recommendation."></textarea>
+        </div>
+        <div class="row">
+          <label class="checkbox-row">
+            <input type="checkbox" id="confidentialInput" />
+            Confidential (force local-only routing)
+          </label>
+          <div class="spacer"></div>
+          <button class="btn" id="runBtn">Run task</button>
+        </div>
+      </section>
+
+      <section class="card" id="resultCard" style="display:none;">
+        <h3>Result <span id="resultExecId" class="pill mute"></span></h3>
+        <div id="resultBanners"></div>
+        <div class="metrics" id="resultMetrics"></div>
+        <div style="margin-top:14px;">
+          <div class="field"><label>Final answer</label></div>
+          <div class="answer-text" id="finalAnswer">&mdash;</div>
+        </div>
+        <div id="verificationBlock" style="margin-top:16px;"></div>
+      </section>
+
+      <section class="card" id="pipelineCard" style="display:none;">
+        <h3>Pipeline <span class="subtle" style="margin:0;">(click a node to expand)</span></h3>
+        <div class="node-list" id="nodeList"></div>
+      </section>
+
+      <section class="card" id="auditCard" style="display:none;">
+        <h3>Audit trail</h3>
+        <div class="audit-list" id="auditList"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
