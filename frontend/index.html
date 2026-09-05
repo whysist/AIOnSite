@@ -56,6 +56,16 @@
       <div id="globalError"></div>
 
       <section class="card">
+        <h3>Document context</h3>
+        <p class="subtle">Index a PDF or image locally, then reference it in your next task.</p>
+        <div class="row">
+          <input type="file" id="documentInput" accept=".pdf,.png,.jpg,.jpeg,.tiff,.bmp" />
+          <button class="btn secondary" id="ingestBtn">Index document</button>
+        </div>
+        <div id="documentStatus" class="subtle" style="margin-top:10px;"></div>
+      </section>
+
+      <section class="card">
         <h3>New task</h3>
         <div class="field" style="margin-bottom:12px;">
           <label for="taskInput">Task</label>

@@ -16,6 +16,17 @@ class TaskRequest(BaseModel):
     confidential: bool = False
 
 
+class DocumentIngestResponse(BaseModel):
+    filename: str
+    document_id: str
+    status: str
+    chunks_created: int
+    parent_chunks: int
+    child_chunks: int
+    equipment_ids: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class TaskCreatedResponse(BaseModel):
     execution_id: str
     status: str

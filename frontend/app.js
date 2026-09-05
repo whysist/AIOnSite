@@ -26,6 +26,9 @@ const els = {
   historyList: document.getElementById("historyList"),
   globalError: document.getElementById("globalError"),
   taskInput: document.getElementById("taskInput"),
+  documentInput: document.getElementById("documentInput"),
+  ingestBtn: document.getElementById("ingestBtn"),
+  documentStatus: document.getElementById("documentStatus"),
   confidentialInput: document.getElementById("confidentialInput"),
   runBtn: document.getElementById("runBtn"),
   resultCard: document.getElementById("resultCard"),
@@ -42,6 +45,7 @@ const els = {
 
 let activeExecId = null;
 let runTimer = null;
+let activeDocument = null;
 
 // ---------------------------------------------------------------------
 // small helpers
@@ -332,7 +336,10 @@ function setRunning(isRunning) {
 }
 
 async function runTask() {
-  const task = els.taskInput.value.trim();
+  const typedTask = els.taskInput.value.trim();
+  const task = activeDocument
+    ? `Use the indexed document "${activeDocument.filename}" as evidence and retrieve relevant passages before answering.\n\n${typedTask}`
+    : typedTask;
   if (!task) {
     showError("Enter a task before running it.");
     return;
@@ -351,6 +358,31 @@ async function runTask() {
     showError(`Task run failed: ${err.message}`);
   } finally {
     setRunning(false);
+  }
+}
+
+async function ingestDocument() {
+  const file = els.documentInput.files[0];
+  if (!file) {
+    showError("Choose a PDF or image before indexing it.");
+    return;
+  }
+  clearError();
+  els.ingestBtn.disabled = true;
+  els.documentStatus.textContent = `Indexing ${file.name}...`;
+  try {
+    const form = new FormData();
+    form.append("file", file);
+    const resp = await fetch(`${apiBase()}/documents/ingest`, { method: "POST", body: form });
+    const body = await resp.json();
+    if (!resp.ok) throw new Error(body.detail || body.message || `HTTP ${resp.status}`);
+    activeDocument = body;
+    els.documentStatus.textContent = `${body.filename}: ${body.chunks_created} chunks indexed. The next task will use it as context.`;
+  } catch (err) {
+    els.documentStatus.textContent = "";
+    showError(`Document indexing failed: ${err.message}`);
+  } finally {
+    els.ingestBtn.disabled = false;
   }
 }
 
@@ -527,6 +559,7 @@ function renderAudit(a) {
 // ---------------------------------------------------------------------
 
 els.runBtn.addEventListener("click", runTask);
+els.ingestBtn.addEventListener("click", ingestDocument);
 els.refreshBtn.addEventListener("click", async () => {
   await refreshHealth();
   await refreshHistoryList();

@@ -9,10 +9,13 @@ in-process registry keyed by ``execution_id``.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
+from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from ..audit.trail import AuditTrail
 from ..core.config import get_settings
@@ -20,9 +23,12 @@ from ..core.exceptions import AIOnSiteError
 from ..core.logging import configure_logging, get_logger
 from ..orchestrator import Orchestrator
 from ..pipeline.state import ExecutionContext
+from ..retrieval.service import KnowledgeBase
+from ..tools.builtin.kb import get_default_knowledge_base
 from ..tools.registry import default_registry
 from .schemas import (
     AuditResponse,
+    DocumentIngestResponse,
     ErrorResponse,
     ExecutionResponse,
     HealthResponse,
@@ -72,6 +78,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
+
 
 def _state() -> _AppState:
     return app.state.ctx
@@ -97,6 +105,33 @@ async def health() -> HealthResponse:
         llm_provider=st.settings.llm_provider.value,
         sovereign_mode=st.settings.sovereign_mode,
         tools=st.registry.names(),
+    )
+
+
+@app.post("/documents/ingest", response_model=DocumentIngestResponse)
+async def ingest_document(file: UploadFile = File(...)) -> DocumentIngestResponse:
+    """Store and index one user document for subsequent RAG-backed tasks."""
+    filename = Path(file.filename or "document").name
+    allowed = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".bmp"}
+    if Path(filename).suffix.lower() not in allowed:
+        raise HTTPException(status_code=415, detail="supported formats: PDF, PNG, JPG, JPEG, TIFF, BMP")
+
+    upload_dir = Path.cwd() / "data" / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    target = upload_dir / f"{uuid4().hex}_{filename}"
+    target.write_bytes(await file.read())
+
+    kb: KnowledgeBase = get_default_knowledge_base()
+    result = kb.ingest_file(str(target))
+    return DocumentIngestResponse(
+        filename=filename,
+        document_id=result.document_id,
+        status=result.status,
+        chunks_created=result.chunks_created,
+        parent_chunks=result.parent_chunks,
+        child_chunks=result.child_chunks,
+        equipment_ids=result.equipment_ids,
+        warnings=result.warnings,
     )
 
 
@@ -169,3 +204,8 @@ async def get_audit(execution_id: str) -> AuditResponse:
         execution_id=execution_id,
         events=_state().audit.as_dicts(execution_id),
     )
+
+
+# API routes are declared before this static fallback, so /health, /tasks,
+# and /documents/ingest keep their API behavior while / serves index.html.
+app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
