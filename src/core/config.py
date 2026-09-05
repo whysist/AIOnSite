@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     # --- Ollama ----------------------------------------------------------
     ollama_base_url: str = "http://localhost:11434"
 
+    # --- Local vision-language model (image / scanned-document understanding) --
+    # Served by the same local Ollama instance as the text model above --
+    # a distinct, smaller model tuned for multimodal input rather than a
+    # separate provider, so it stays covered by the same sovereignty checks.
+    vlm_model: str = "moondream:1.8b"
+
     # --- vLLM ----------------------------------------------------------
     vllm_base_url: str | None = "http://localhost:8000/v1"
     vllm_api_key: str | None = "local"
