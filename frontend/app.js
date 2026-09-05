@@ -300,6 +300,13 @@ function renderResult(ex) {
       "required evidence or requirements were not fully satisfied. See Verification below.</div>"
     );
   }
+  if (ex.replans > 0) {
+    banners.push(
+      `<div class="banner warn">The orchestrator <strong>re-planned ${ex.replans} time(s)</strong> ` +
+      "after an earlier attempt was judged incomplete by the verifier, and re-ran with that " +
+      "feedback before producing this result.</div>"
+    );
+  }
   els.resultBanners.innerHTML = banners.join("");
 
   const taskStatus = ex.task_status ?? ex.status;

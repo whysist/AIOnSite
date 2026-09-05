@@ -174,3 +174,34 @@ async def test_llm_critique_cannot_override_a_completeness_gap_back_to_pass():
     )
     assert res.passed is False
     assert any(m.requirement_id == "req_1" for m in res.missing_requirements)
+
+
+async def test_missing_citation_flagged_when_evidence_tool_used_but_uncited():
+    """Regression test: equipment_lookup/search_knowledge_base/etc. return
+    real source/page/record provenance, but nothing previously checked that
+    the final text actually quoted it -- a run could use real data and still
+    read as an unsourced opinion.
+    """
+    ev = [Evidence(source="equipment_lookup", producer_tool="equipment_lookup", producer_node="n1")]
+    res = await ResultVerifier(None).verify(
+        "task", "V-101 was inspected last month and pressure is fine.", evidence=ev,
+    )
+    assert any(i.code == "missing_citation" for i in res.issues)
+
+
+async def test_citation_present_does_not_flag_missing_citation():
+    ev = [Evidence(source="equipment_lookup", producer_tool="equipment_lookup", producer_node="n1")]
+    res = await ResultVerifier(None).verify(
+        "task",
+        "V-101 pressure is 14.5 bar [source: equipment database, inspection_records].",
+        evidence=ev,
+    )
+    assert not any(i.code == "missing_citation" for i in res.issues)
+
+
+async def test_missing_citation_not_flagged_when_no_evidence_tool_used():
+    # A calculator-only tool call carries no provenance to cite -- must not
+    # be treated the same as a search/lookup result.
+    ev = [Evidence(source="calculator", producer_tool="calculator", producer_node="n1")]
+    res = await ResultVerifier(None).verify("task", "The result is 42.", evidence=ev)
+    assert not any(i.code == "missing_citation" for i in res.issues)

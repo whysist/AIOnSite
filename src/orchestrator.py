@@ -31,11 +31,12 @@ from .core.exceptions import AIOnSiteError
 from .core.logging import bind_execution, clear_execution, get_logger
 from .pipeline.builder import build_pipeline
 from .pipeline.executor import PipelineExecutor
-from .pipeline.models import ExecutionStatus, NodeStatus, PipelineNode
+from .pipeline.models import ExecutionStatus, NodeStatus, Pipeline, PipelineNode
 from .pipeline.requirements import RequirementStatus, extract_requirements
 from .pipeline.state import ExecutionContext
 from .pipeline.task_status import TaskStatus, compute_task_status
 from .tools.registry import ToolRegistry, default_registry
+from .verification.schemas import Recommendation, Severity
 from .verification.verifier import ResultVerifier
 
 _log = get_logger("orchestrator")
@@ -123,43 +124,101 @@ class Orchestrator:
             backoff_seconds=self.settings.plan_retry_backoff_seconds,
         )
 
-        plan = await planner.plan(ctx.task)
-        ctx.plan = plan.model_dump()
-        if plan.degraded:
-            ctx.plan_degraded = True
-            ctx.plan_degraded_reason = plan.degraded_reason
+        pipeline: Pipeline
+        replan_feedback: dict[str, Any] | None = None
+        attempt = 0
+
+        # Bounded by max_replans: a verifier verdict of REPLAN causes at most
+        # this many additional plan+run cycles, each fed the previous
+        # attempt's concrete shortfall as extra planner context (the same
+        # mechanism the planner already uses to recover from malformed JSON --
+        # see Planner.plan()'s "your previous response was invalid" retry).
+        while True:
+            plan = await planner.plan(ctx.task, context=replan_feedback)
+            ctx.plan = plan.model_dump()
+            if plan.degraded:
+                ctx.plan_degraded = True
+                ctx.plan_degraded_reason = plan.degraded_reason
+                self.audit.record(
+                    ctx.execution_id, AuditEventType.PLAN_FAILED, component="planner",
+                    status="degraded",
+                    message=plan.degraded_reason or "planner fell back to the deterministic plan",
+                    metadata={"goal": plan.goal},
+                )
             self.audit.record(
-                ctx.execution_id, AuditEventType.PLAN_FAILED, component="planner",
-                status="degraded",
-                message=plan.degraded_reason or "planner fell back to the deterministic plan",
-                metadata={"goal": plan.goal},
+                ctx.execution_id, AuditEventType.PLAN_CREATED, component="planner",
+                message=plan.goal,
+                metadata={
+                    "steps": [s.model_dump() for s in plan.steps],
+                    "degraded": plan.degraded, "attempt": attempt,
+                },
             )
-        self.audit.record(
-            ctx.execution_id, AuditEventType.PLAN_CREATED, component="planner",
-            message=plan.goal,
-            metadata={"steps": [s.model_dump() for s in plan.steps], "degraded": plan.degraded},
-        )
-        ctx.requirements = extract_requirements(plan)
+            ctx.requirements = extract_requirements(plan)
 
-        pipeline = build_pipeline(
-            plan, settings=self.settings,
-            require_local=confidential or self.settings.sovereign_mode,
-        )
-        ctx.pipeline = pipeline
+            pipeline = build_pipeline(
+                plan, settings=self.settings,
+                require_local=confidential or self.settings.sovereign_mode,
+            )
+            ctx.pipeline = pipeline
 
-        default_llm, _ = router.get_llm(plan_node)
-        agent_library = build_agent_library(default_llm)
-        verifier = ResultVerifier(default_llm if self._use_llm_verifier else None)
+            default_llm, _ = router.get_llm(plan_node)
+            agent_library = build_agent_library(default_llm)
+            verifier = ResultVerifier(default_llm if self._use_llm_verifier else None)
 
-        executor = PipelineExecutor(
-            agent_library=agent_library,
-            registry=self.registry,
-            router=router,
-            audit=self.audit,
-            verifier=verifier,
-            settings=self.settings,
-        )
-        await executor.run(ctx, pipeline)
+            executor = PipelineExecutor(
+                agent_library=agent_library,
+                registry=self.registry,
+                router=router,
+                audit=self.audit,
+                verifier=verifier,
+                settings=self.settings,
+            )
+            await executor.run(ctx, pipeline)
+
+            verdict = ctx.final_verification
+            if (
+                verdict is None
+                or verdict.recommendation is not Recommendation.REPLAN
+                or attempt >= self.settings.max_replans
+            ):
+                break
+
+            attempt += 1
+            ctx.replans = attempt
+            reasons = [m.description for m in verdict.missing_requirements] or [
+                i.message for i in verdict.issues
+                if i.severity in (Severity.MAJOR, Severity.CRITICAL)
+            ]
+            self.audit.record(
+                ctx.execution_id, AuditEventType.REPLAN_TRIGGERED, component="orchestrator",
+                message=f"attempt {attempt}/{self.settings.max_replans}",
+                metadata={"reasons": reasons},
+            )
+            # Archive this attempt's per-node results before the next loop
+            # iteration overwrites ctx.state.node_results with the new
+            # pipeline's (same step ids are reused, so they would otherwise
+            # be silently replaced) -- full history stays in the audit trail
+            # regardless, this just keeps it in the execution snapshot too.
+            ctx.state.scratch.setdefault("attempts", []).append({
+                "attempt": attempt, "plan": ctx.plan,
+                "final_answer": ctx.final_answer,
+                "final_verification": verdict.model_dump(),
+                "node_results": {
+                    nid: r.model_dump() for nid, r in ctx.state.node_results.items()
+                },
+            })
+            replan_feedback = {
+                "previous_attempt_failed": True,
+                "previous_attempt_shortfall": reasons,
+                "instruction": (
+                    "The previous attempt at this task was judged incomplete for the "
+                    "reasons listed above. Produce a plan that concretely addresses "
+                    "them -- in particular, the final step must deliver a decisive "
+                    "answer, not a follow-up question or an offer to do more work."
+                ),
+            }
+            ctx.final_answer = None
+            ctx.final_verification = None
 
         failed = [n.id for n in pipeline.nodes if n.status is NodeStatus.FAILED]
         if ctx.final_answer is None:

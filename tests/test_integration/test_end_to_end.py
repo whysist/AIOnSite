@@ -170,3 +170,117 @@ async def test_v101_style_scenario_cannot_produce_false_completion(monkeypatch):
         assert ctx.final_answer_degraded is True
         assert "INSPECTION STATUS" in ctx.final_answer
         assert "INCOMPLETE" in ctx.final_answer or "BLOCKED" in ctx.final_answer
+
+
+class _ScriptedReplanLLM(BaseLLM):
+    """Every call returns a valid plan and a valid final answer -- the only
+    thing that varies is the verifier's LLM critique, which fails the first
+    attempt (recommendation=replan) and passes the second. Used to prove the
+    orchestrator's auto-replan loop actually re-plans and re-runs on a
+    REPLAN verdict, bounded by ``max_replans``, rather than just reporting
+    the verdict and stopping.
+    """
+
+    provider_name = "scripted-replan"
+
+    def __init__(self) -> None:
+        super().__init__(model="scripted-replan")
+        self.verify_calls = 0
+        self.plan_calls = 0
+
+    async def _complete(self, request):
+        kind = str(request.metadata.get("aionsite_kind", "")).lower()
+        if kind == "plan":
+            self.plan_calls += 1
+            content = json.dumps({
+                "goal": "Produce a decisive final answer",
+                "steps": [
+                    {
+                        "id": "step_1", "agent": "summarizer",
+                        "description": "Produce the final answer.", "depends_on": [],
+                    }
+                ],
+                "requirements": ["Provide a decisive final answer"],
+            })
+        elif kind == "verify":
+            self.verify_calls += 1
+            passed = self.verify_calls > 1
+            content = json.dumps({
+                "passed": passed,
+                "score": 1.0 if passed else 0.2,
+                "issues": [] if passed else [
+                    {"code": "incomplete", "message": "no decisive answer", "severity": "critical"}
+                ],
+                "recommendation": "accept" if passed else "replan",
+            })
+        else:
+            content = "Final answer: the vessel is within limits [source: equipment database, table]."
+        return LLMResponse(content=content, model=self.model, provider=self.provider_name)
+
+
+async def test_orchestrator_auto_replans_on_replan_verdict_then_stops(monkeypatch):
+    from src.tools.registry import ToolRegistry
+
+    scripted = _ScriptedReplanLLM()
+    monkeypatch.setattr("src.agents.router.create_llm", lambda *a, **kw: scripted)
+
+    audit = AuditTrail()
+    orch = Orchestrator(
+        _settings(max_replans=1), audit=audit, registry=ToolRegistry(),
+    )
+    try:
+        ctx = await orch.run_task("Is V-101 within limits?")
+    finally:
+        await orch.aclose()
+
+    # One initial plan + one replan = 2 plans; one failing verify + one
+    # passing verify = 2 verifications -- proves the loop actually ran
+    # twice, not that it merely reported "replan" and stopped.
+    assert scripted.plan_calls == 2
+    assert scripted.verify_calls == 2
+    assert ctx.replans == 1
+    assert ctx.final_verification is not None
+    assert ctx.final_verification.passed is True
+
+    events = [e.event_type for e in audit.events(ctx.execution_id)]
+    assert AuditEventType.REPLAN_TRIGGERED in events
+    # the archived first attempt is still visible, not silently discarded
+    assert len(ctx.state.scratch.get("attempts", [])) == 1
+
+
+async def test_orchestrator_stops_replanning_at_max_replans(monkeypatch):
+    """A verifier that always says replan must not loop forever -- it stops
+    at settings.max_replans and reports whatever the last attempt produced."""
+    from src.tools.registry import ToolRegistry
+
+    class _AlwaysReplanLLM(_ScriptedReplanLLM):
+        async def _complete(self, request):
+            kind = str(request.metadata.get("aionsite_kind", "")).lower()
+            if kind == "verify":
+                self.verify_calls += 1
+                return LLMResponse(
+                    content=json.dumps({
+                        "passed": False, "score": 0.1,
+                        "issues": [{"code": "incomplete", "message": "x", "severity": "critical"}],
+                        "recommendation": "replan",
+                    }),
+                    model=self.model, provider=self.provider_name,
+                )
+            return await super()._complete(request)
+
+    scripted = _AlwaysReplanLLM()
+    monkeypatch.setattr("src.agents.router.create_llm", lambda *a, **kw: scripted)
+
+    orch = Orchestrator(
+        _settings(max_replans=2), registry=ToolRegistry(),
+    )
+    try:
+        ctx = await orch.run_task("Is V-101 within limits?")
+    finally:
+        await orch.aclose()
+
+    # max_replans=2 -> at most 3 total plan/run cycles (1 original + 2 replans)
+    assert scripted.plan_calls == 3
+    assert ctx.replans == 2
+    assert ctx.final_verification is not None
+    assert ctx.final_verification.passed is False

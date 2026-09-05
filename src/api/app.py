@@ -148,6 +148,7 @@ async def get_task(execution_id: str) -> ExecutionResponse:
         ),
         error=ctx.error,
         node_results={k: v.model_dump() for k, v in ctx.state.node_results.items()},
+        replans=ctx.replans,
     )
 
 

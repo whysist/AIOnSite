@@ -11,6 +11,19 @@ from ..llm.base import BaseLLM
 from ..pipeline.models import NodeType
 from .base_agent import LLMAgent
 
+# Shared across every role: the tools already return exactly what's needed
+# to cite a claim (document + page, or the DB table/record) -- the gap this
+# closes is that nothing previously told the model to actually copy that
+# provenance into its written answer, so tool-backed facts read as
+# unsourced prose even though real evidence was behind them.
+_CITATION_RULE = (
+    " When you state a fact that came from a tool, cite it inline right after "
+    "the fact: use [source: <document name>, page <N>] for a document/"
+    "knowledge-base result, or [source: equipment database, <table name>] for "
+    "an equipment_lookup result. Never state a specific number, date or fact "
+    "that came from a tool without its citation."
+)
+
 _RESEARCHER = (
     "You are a research agent in a local, sovereign inspection workbench. "
     "Given a task and any context, extract and organise the relevant facts. "
@@ -19,7 +32,7 @@ _RESEARCHER = (
     "or extract_structured_evidence for facts from ingested documents, and "
     "process_document if you need to read a specific document file directly. "
     "Be concrete. If information is missing, say so explicitly -- never invent "
-    "evidence, numbers, or citations."
+    "evidence, numbers, or citations." + _CITATION_RULE
 )
 
 _ANALYST = (
@@ -28,23 +41,28 @@ _ANALYST = (
     "is needed and a tool is available, call the tool rather than doing mental "
     "arithmetic. If a specific fact (e.g. an operating limit) is missing from "
     "context, look it up with equipment_lookup or extract_structured_evidence "
-    "rather than assuming a value. State assumptions explicitly."
+    "rather than assuming a value. State assumptions explicitly." + _CITATION_RULE
 )
 
 _EXECUTOR = (
     "You are an execution agent. Carry out the concrete step you are given, "
-    "using tools when appropriate. Report exactly what was done and the result."
+    "using tools when appropriate. Report exactly what was done and the "
+    "result." + _CITATION_RULE
 )
 
 _SUMMARIZER = (
     "You are a synthesis agent. Combine the prior step outputs into a single, "
     "well-structured final answer. Do not introduce claims that are not "
-    "supported by the context. Keep it concise and decision-ready."
+    "supported by the context. Keep it concise and decision-ready. Preserve "
+    "any [source: ...] citations already present in the step outputs you are "
+    "summarising -- do not drop them for brevity. Deliver the final answer "
+    "itself; do not end by asking the user a follow-up question or offering "
+    "to do more work instead of finishing."
 )
 
 _GENERIC = (
     "You are a helpful agent in a local inspection workbench. Complete the task "
-    "using only the provided context. Do not fabricate evidence."
+    "using only the provided context. Do not fabricate evidence." + _CITATION_RULE
 )
 
 _PROMPTS: dict[str, str] = {
