@@ -63,6 +63,99 @@ function fmtMs(ms) {
   return `${(ms / 1000).toFixed(1)} s`;
 }
 
+// ---------------------------------------------------------------------
+// minimal markdown -> HTML for the final answer -- no library, no CDN
+// (consistent with the rest of this page and the project's local-first
+// ethos). Handles exactly what the model's own writing style actually
+// uses: #/##/###/#### headings, **bold**, *italic*, `code`, "- "/"* "
+// bullets, "1. " numbered lists, blank-line paragraphs, and highlights
+// [source: ...] citations so the citation feature is actually visible.
+// Text is HTML-escaped before any markup is applied, so model output can
+// never inject markup of its own.
+// ---------------------------------------------------------------------
+
+function mdInline(raw) {
+  let out = esc(raw);
+  out = out.replace(/\[source:([^\]]+)\]/gi, '<span class="citation">source:$1</span>');
+  out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
+  out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  out = out.replace(/(^|[^*])\*([^*\s][^*]*?)\*(?!\*)/g, "$1<em>$2</em>");
+  return out;
+}
+
+function renderMarkdownLite(text) {
+  if (!text) return "";
+  const lines = String(text).replace(/\r\n/g, "\n").split("\n");
+  const html = [];
+  let listType = null;
+  let para = [];
+
+  const flushPara = () => {
+    if (para.length) {
+      html.push(`<p>${mdInline(para.join(" "))}</p>`);
+      para = [];
+    }
+  };
+  const closeList = () => {
+    if (listType) {
+      html.push(`</${listType}>`);
+      listType = null;
+    }
+  };
+
+  for (const rawLine of lines) {
+    // Fully trimmed, not just trailing whitespace: the model commonly
+    // indents sub-bullets ("  - Pressure: ...") and this is a flat, not a
+    // nested, list renderer -- indentation is dropped rather than left to
+    // accidentally fall through to a paragraph.
+    const line = rawLine.trim();
+    if (!line) {
+      flushPara();
+      closeList();
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,4})\s+(.*)$/);
+    if (heading) {
+      flushPara();
+      closeList();
+      const level = Math.min(heading[1].length + 2, 6); // md h1 -> html h3 .. md h4 -> h6
+      html.push(`<h${level}>${mdInline(heading[2])}</h${level}>`);
+      continue;
+    }
+
+    const bullet = line.match(/^[-*]\s+(.*)$/);
+    if (bullet) {
+      flushPara();
+      if (listType !== "ul") {
+        closeList();
+        html.push("<ul>");
+        listType = "ul";
+      }
+      html.push(`<li>${mdInline(bullet[1])}</li>`);
+      continue;
+    }
+
+    const numbered = line.match(/^\d+[.)]\s+(.*)$/);
+    if (numbered) {
+      flushPara();
+      if (listType !== "ol") {
+        closeList();
+        html.push("<ol>");
+        listType = "ol";
+      }
+      html.push(`<li>${mdInline(numbered[1])}</li>`);
+      continue;
+    }
+
+    closeList();
+    para.push(line);
+  }
+  flushPara();
+  closeList();
+  return html.join("\n");
+}
+
 function fmtTime(unixSeconds) {
   if (!unixSeconds) return "—";
   try {
@@ -321,7 +414,9 @@ function renderResult(ex) {
       <div class="value" style="font-size:15px;">${ex.sovereign_mode ? "sovereign" : "open"}${ex.confidential ? " + confidential" : ""}</div></div>
   `;
 
-  els.finalAnswer.textContent = ex.final_answer || "(no final answer was produced)";
+  els.finalAnswer.innerHTML = ex.final_answer
+    ? renderMarkdownLite(ex.final_answer)
+    : "<p>(no final answer was produced)</p>";
 
   const v = ex.final_verification;
   if (v) {
