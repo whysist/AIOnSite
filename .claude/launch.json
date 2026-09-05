@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "aionsite-api",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "src.main", "--serve", "--port", "8000"],
+      "port": 8000
+    },
+    {
+      "name": "aionsite-frontend",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "5500", "--directory", "frontend"],
+      "port": 5500
+    }
+  ]
+}

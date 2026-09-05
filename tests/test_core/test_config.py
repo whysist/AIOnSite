@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from src.core.config import Environment, LLMProvider, Settings
@@ -63,6 +65,38 @@ def test_safe_dump_redacts_secrets():
     assert dumped["openai_api_key"] == "***redacted***"
     assert dumped["local_llm_api_key"] == "***redacted***"
     assert dumped["llm_provider"] == "ollama"  # enum rendered as its value
+
+
+def test_sovereign_mode_forces_ml_libraries_offline(monkeypatch):
+    """Regression test: a live run's logs showed sentence-transformers
+    making real HTTPS calls to huggingface.co on every startup, even with
+    sovereign_mode on and the model already cached locally -- see the
+    docstring on Settings._enforce_offline_ml_libraries."""
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+
+    Settings(_env_file=None, sovereign_mode=True, llm_provider="ollama")
+
+    assert os.environ["HF_HUB_OFFLINE"] == "1"
+    assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
+
+
+def test_non_sovereign_mode_does_not_force_libraries_offline(monkeypatch):
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+
+    Settings(_env_file=None, sovereign_mode=False, llm_provider="openai")
+
+    assert "HF_HUB_OFFLINE" not in os.environ
+    assert "TRANSFORMERS_OFFLINE" not in os.environ
+
+
+def test_sovereign_mode_never_clobbers_an_explicit_operator_setting(monkeypatch):
+    monkeypatch.setenv("HF_HUB_OFFLINE", "0")
+
+    Settings(_env_file=None, sovereign_mode=True, llm_provider="ollama")
+
+    assert os.environ["HF_HUB_OFFLINE"] == "0"
 
 
 def test_get_settings_wraps_validation_error(monkeypatch):
