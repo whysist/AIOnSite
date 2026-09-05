@@ -31,6 +31,7 @@ class AuditEventType(str, enum.Enum):
     REPLAN_TRIGGERED = "replan_triggered"
     TASK_STATUS_DETERMINED = "task_status_determined"
     FINAL_ANSWER_GENERATED = "final_answer_generated"
+    SOVEREIGNTY_VERIFIED = "sovereignty_verified"
     EXECUTION_COMPLETED = "execution_completed"
     EXECUTION_FAILED = "execution_failed"
 

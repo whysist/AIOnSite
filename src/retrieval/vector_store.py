@@ -50,7 +50,18 @@ class VectorStore:
         try:
             import chromadb
             os.makedirs(self.persist_dir, exist_ok=True)
-            self.client = chromadb.PersistentClient(path=self.persist_dir)
+            # anonymized_telemetry defaults to True upstream and posts to a
+            # remote PostHog endpoint (visible in a real run's logs:
+            # "Anonymized telemetry enabled"). There's no legitimate reason
+            # for this project to ever phone home, sovereign mode or not --
+            # disabled unconditionally, unlike the HF offline-mode setting
+            # in core/config.py which stays conditional on sovereign_mode
+            # because it has a legitimate online use case (first-time model
+            # download).
+            self.client = chromadb.PersistentClient(
+                path=self.persist_dir,
+                settings=chromadb.config.Settings(anonymized_telemetry=False),
+            )
             self.collection = self.client.get_or_create_collection(name=self.collection_name)
             logger.info(f"Initialized ChromaDB vector store at {self.persist_dir}")
         except Exception as e:

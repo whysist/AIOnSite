@@ -29,6 +29,7 @@ from .audit.trail import AuditTrail
 from .core.config import Settings, get_settings
 from .core.exceptions import AIOnSiteError
 from .core.logging import bind_execution, clear_execution, get_logger
+from .core.network_guard import NetworkGuard
 from .pipeline.builder import build_pipeline
 from .pipeline.executor import PipelineExecutor
 from .pipeline.models import ExecutionStatus, NodeStatus, Pipeline, PipelineNode
@@ -87,8 +88,14 @@ class Orchestrator:
         )
         self._routers.append(router)
 
+        # Watches the real socket layer for the whole run -- an independent,
+        # code-level proof that nothing left the machine, on top of the two
+        # policy-level checks above (see network_guard.py for why this is a
+        # third, distinct layer rather than redundant with them).
+        guard = NetworkGuard()
         try:
-            await self._run(ctx, router, confidential)
+            with guard:
+                await self._run(ctx, router, confidential)
         except AIOnSiteError as exc:
             ctx.error = exc.message
             ctx.mark_finished(ExecutionStatus.FAILED)
@@ -107,6 +114,17 @@ class Orchestrator:
             )
         finally:
             clear_execution()
+
+        self.audit.record(
+            ctx.execution_id, AuditEventType.SOVEREIGNTY_VERIFIED, component="orchestrator",
+            status="ok" if guard.is_sovereign else "violation",
+            message=(
+                f"{len(guard.contacted_hosts)} host(s) contacted during this run, all loopback"
+                if guard.is_sovereign else
+                "non-loopback host(s) contacted: " + ", ".join(sorted(set(guard.violations)))
+            ),
+            metadata=guard.summary(),
+        )
         return ctx
 
     # ------------------------------------------------------------------

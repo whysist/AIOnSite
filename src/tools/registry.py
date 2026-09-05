@@ -60,13 +60,25 @@ class ToolRegistry:
         return await self.get(name).run(**kwargs)
 
 
-def default_registry(*, allow_network: bool = False) -> ToolRegistry:
-    """Registry pre-loaded with the safe built-in tools."""
+def default_registry(
+    *, allow_network: bool = False, allow_write_filesystem: bool = True
+) -> ToolRegistry:
+    """Registry pre-loaded with the safe built-in tools.
+
+    ``allow_write_filesystem`` defaults to True: every write-capable
+    built-in tool (currently only ``DocxExportTool``) sandboxes its writes
+    to a fixed output directory via the same ``Path.relative_to()``
+    containment every read tool already uses -- it is not a blanket
+    filesystem-write allowance. Set it False for a deployment that must
+    stay strictly read-only.
+    """
     from .builtin import BUILTIN_TOOLS
 
     allowed = {ToolPermission.PURE, ToolPermission.READ_FILESYSTEM}
     if allow_network:
         allowed.add(ToolPermission.NETWORK)
+    if allow_write_filesystem:
+        allowed.add(ToolPermission.WRITE_FILESYSTEM)
     registry = ToolRegistry(allowed_permissions=allowed)
     for tool_cls in BUILTIN_TOOLS:
         try:

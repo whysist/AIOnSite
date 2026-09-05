@@ -54,6 +54,27 @@ async def test_end_to_end_offline_run():
     assert summary["pipeline"]["edges"]
 
 
+async def test_sovereignty_verified_event_records_zero_external_hosts():
+    """The orchestrator watches the real socket layer for the whole run (see
+    src/core/network_guard.py) and records what it saw -- this is the
+    automated, re-runnable half of the "prove no external calls were made"
+    requirement; a live/physical proof (network monitor, unplugged network)
+    is the other half, done on demo day."""
+    audit = AuditTrail()
+    orch = Orchestrator(_settings(), audit=audit)
+    try:
+        ctx = await orch.run_task("Is V-101 within limits?")
+    finally:
+        await orch.aclose()
+
+    events = [e for e in audit.events(ctx.execution_id) if e.event_type is AuditEventType.SOVEREIGNTY_VERIFIED]
+    assert len(events) == 1
+    event = events[0]
+    assert event.status == "ok"
+    assert event.metadata["sovereign"] is True
+    assert event.metadata["external_hosts"] == []
+
+
 async def test_sovereign_mode_records_policy_and_stays_local():
     audit = AuditTrail()
     orch = Orchestrator(_settings(llm_provider="echo", sovereign_mode=True), audit=audit)

@@ -11,6 +11,7 @@ but new code should call :func:`get_settings` (cached).
 from __future__ import annotations
 
 import enum
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -81,6 +82,12 @@ class Settings(BaseSettings):
     # --- Ollama ----------------------------------------------------------
     ollama_base_url: str = "http://localhost:11434"
 
+    # --- Local vision-language model (image / scanned-document understanding) --
+    # Served by the same local Ollama instance as the text model above --
+    # a distinct, smaller model tuned for multimodal input rather than a
+    # separate provider, so it stays covered by the same sovereignty checks.
+    vlm_model: str = "moondream:1.8b"
+
     # --- vLLM ----------------------------------------------------------
     vllm_base_url: str | None = "http://localhost:8000/v1"
     vllm_api_key: str | None = "local"
@@ -142,6 +149,28 @@ class Settings(BaseSettings):
                 f"'{self.llm_provider.value}' is a cloud provider. "
                 "Use one of: " + ", ".join(sorted(p.value for p in _LOCAL_PROVIDERS))
             )
+        return self
+
+    @model_validator(mode="after")
+    def _enforce_offline_ml_libraries(self) -> Settings:
+        """A third sovereignty enforcement point, alongside the provider
+        check above and ModelRouter's routing-time check: found via a live
+        run whose logs showed sentence-transformers making real HTTPS calls
+        to huggingface.co to check for a newer model revision on every
+        startup -- even though it then used the already-cached local
+        weights regardless. That is a real external call sovereign mode is
+        supposed to make impossible, coming from a code path this project
+        doesn't own (src/retrieval/embeddings.py), not from a provider this
+        project wrote.
+
+        ``setdefault`` so an operator's own environment setting is never
+        clobbered. Only forced when sovereign_mode is on: a normal
+        (non-sovereign) first-time setup still needs to reach Hugging Face
+        once to download the model at all -- see requirements.txt.
+        """
+        if self.sovereign_mode:
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
         return self
 
     # ------------------------------------------------------------------

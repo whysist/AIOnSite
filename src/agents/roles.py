@@ -81,10 +81,11 @@ _DEFAULT_TOOLS: dict[str, list[str]] = {
     "executor": [
         "calculator", "calculate_deviation", "json_parse", "read_file", "text_stats",
         "equipment_lookup", "process_document", "search_knowledge_base",
+        "analyze_image", "export_approval_note",
     ],
     "researcher": [
         "read_file", "text_stats", "json_parse",
-        "equipment_lookup", "process_document",
+        "equipment_lookup", "process_document", "analyze_image",
         "search_knowledge_base", "extract_structured_evidence",
     ],
 }

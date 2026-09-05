@@ -35,6 +35,26 @@ def test_default_registry_has_builtins_but_no_network_tool():
     assert "calculate_deviation" in reg.names()
 
 
+def test_default_registry_includes_the_sandboxed_write_tool_by_default():
+    """Regression test: a live run against the real API showed
+    export_approval_note silently missing from the registered tools --
+    default_registry() allowed PURE/READ_FILESYSTEM(/NETWORK) but never
+    WRITE_FILESYSTEM, so DocxExportTool was dropped the same way a
+    NETWORK-permission tool would be (see the comment in vision_tool.py
+    about that exact trap). Its writes are sandboxed to a fixed output
+    directory the same way read tools are sandboxed to data/, so it is
+    allowed by default rather than requiring an explicit opt-in."""
+    reg = default_registry()
+    assert "export_approval_note" in reg.names()
+    assert "analyze_image" in reg.names()
+
+
+def test_default_registry_write_filesystem_can_still_be_excluded():
+    reg = default_registry(allow_write_filesystem=False)
+    assert "export_approval_note" not in reg.names()
+    assert "calculator" in reg.names()  # unaffected
+
+
 async def test_calculator_rejects_names_and_calls():
     result = await CalculatorTool().run(expression="__import__('os').system('x')")
     assert result.ok is False
